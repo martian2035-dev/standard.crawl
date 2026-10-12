@@ -1,40 +1,41 @@
-# Python-generated files
+# Python 与本地工具环境
 __pycache__/
 *.py[oc]
+.venv/
+.pytest_cache/
 build/
 dist/
 wheels/
 *.egg-info
-
-# Virtual environments
-.venv
-
-# macOS
 .DS_Store
 
-# ---- 临时文件 ----
-# 注意：standard_db/ 与 .crawl_state/ 都需要入库！
-#   standard_db/   构建产物（数据库 + manifest），只保留在本仓库内
-#   .crawl_state/  采集进度（页面游标），断点续爬靠它
+# 私有输入、凭证与本机配置
+*.xlsx
+*.xlsm
+*.xls
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+.aws/
+.ssh/
+.codex/
+.agents/
+
+# 本地运行状态及中间文件
+/standard_db/
+/.crawl_state/
+/audit_inputs/
+/local_audit/
+/.github_audit_work/
+/.github_release/
+/github-export/
 *.tmp
-standard_db/*.tmp
-.crawl_state/*.tmp
 *.db-wal
 *.db-shm
 *.db-journal
 
-# 数据库本体「二选一」归档，由 scripts/publish_db.sh 用 git add -f 显式纳入版本控制：
-#   DB_COMPRESS=0（默认）→ 归档 standards.db
-#   DB_COMPRESS=1        → 归档 standards.db.gz
-# 两个都写进 ignore，是为了防止 `git add -A` 把另一份也误提交。
-standard_db/standards.db
-standard_db/standards.db.gz
-
-# 统计表核验结果、缓存与网页证据仅保存在本地。
-/local_audit/
-
-# GitHub 分片核验检查点及 Release 临时产物，由 Actions 附件保存。
-/.github_audit_work/
-/.github_release/
-/github-export/
-/standard_db/manifest.json
+# 公开工作流可提交标准清单对应的核验表。
+!/reports/标准信息统计表_已核验.xlsx

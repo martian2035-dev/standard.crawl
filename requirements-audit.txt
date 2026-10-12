@@ -1,4 +1,4 @@
-# CNB 独立核验只需这些依赖，不安装全量采集器的 pandas。
+# 独立核验所需依赖。
 beautifulsoup4>=4.12,<5
 requests>=2.31,<3
 openpyxl>=3.1,<4

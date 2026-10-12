@@ -1,19 +1,16 @@
 """独立核验的离线集成测试：历史基线、分片续跑、行号映射与请求预算。"""
 import csv
 import json
-import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import yaml
 
-from audit_pipeline import ROOT, Baseline, merge, parse_args, precheck, prepare, run
+from audit_pipeline import Baseline, merge, parse_args, precheck, prepare, run
 from standard_audit import (Auditor, Evidence, Fetcher, LocalStore, Observation,
                             RequestBudgetExceeded, merge_observations, now)
-from scripts import audit_artifacts
 
 
 def make_fixture(root):
@@ -46,22 +43,6 @@ def make_fixture(root):
 
 
 class PipelineTests(unittest.TestCase):
-    def test_attachment_missing_is_allowed_only_for_first_run(self):
-        env = {"CNB_COMMIT": "a" * 40, "CNB_REPO_SLUG": "test/repo", "CNB_TOKEN": "测试令牌", "AUDIT_RESTORE_COMMIT": "", "CNB_EVENT": "push"}
-        response = Mock(status_code=200)
-        response.json.return_value = []
-        with patch.dict(os.environ, env), patch("scripts.audit_artifacts.requests.get", return_value=response) as request:
-            audit_artifacts.restore()
-            self.assertEqual(request.call_args.kwargs["headers"]["Accept"], "application/vnd.cnb.api+json")
-            with patch.dict(os.environ, {"CNB_EVENT": "api_trigger_audit_continue"}):
-                with self.assertRaisesRegex(ValueError, "没有找到前片成果"):
-                    audit_artifacts.restore()
-            with patch.dict(os.environ, {"AUDIT_RESTORE_COMMIT": "b" * 40}):
-                with self.assertRaisesRegex(ValueError, "没有核验附件"):
-                    audit_artifacts.restore()
-            response.status_code = 403
-            with self.assertRaisesRegex(ValueError, "停止以免丢失进度"):
-                audit_artifacts.restore()
 
     def test_prepare_is_offline_and_projected_input_has_no_file_information(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -163,23 +144,6 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "manifest"):
                 Baseline(db)
 
-    def test_cnb_audit_is_separate_from_data_commit_and_deployment(self):
-        config = yaml.safe_load((ROOT / ".cnb.yml").read_text())
-        audit = config["codex/standard-table-audit"]["push"]
-        self.assertEqual(audit, config["main"]["api_trigger_audit"])
-        scripts = json.dumps(audit, ensure_ascii=False)
-        for forbidden in ("api_trigger_vps", "publish_db", "commit_back", "sync_latest", "web_secrets"):
-            self.assertNotIn(forbidden, scripts)
-        self.assertEqual(audit[0]["env"]["AUDIT_DELAY"], "5")
-        upload = next(s for s in audit[0]["endStages"] if s.get("image"))
-        self.assertEqual(upload["settings"]["ttl"], 7)
-        self.assertEqual(audit[0]["endStages"][-1]["options"]["event"], "api_trigger_audit_continue")
-        self.assertNotIn("AUDIT_NEXT", audit[0]["endStages"][-1].get("env", {}))
-        self.assertNotIn("AUDIT_UPLOADED_FILES", audit[0]["endStages"][-1].get("env", {}))
-        initialization = next(s for s in audit[0]["stages"] if "audit_uploaded" in s.get("exports", {}))
-        self.assertEqual(initialization["exports"]["audit_next"], "AUDIT_NEXT")
-        self.assertEqual(audit, config["codex/standard-table-audit"]["api_trigger_audit_continue"])
-        yaml.safe_load((ROOT / ".cnb/web_trigger.yml").read_text())
 
 
 if __name__ == "__main__":

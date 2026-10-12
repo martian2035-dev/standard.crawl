@@ -81,7 +81,7 @@ jobs:
           CAMPAIGN: ${{ steps.audit.outputs.campaign }}
         run: |
           tag="audit-${CAMPAIGN}"
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --target "$(git rev-parse HEAD)" --title "统计表核验 ${CAMPAIGN}" --notes '原表副本追加核验状态、发布日期、实施日期、现行替代版本与网页来源。未确认和未覆盖项保留待复核，不把查询失败视为废止。'
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --target "$(git rev-parse HEAD)" --title "标准清单核验 ${CAMPAIGN}" --notes '按公开查询清单核验状态、发布日期、实施日期、现行替代版本与网页来源。未确认和未覆盖项保留待复核，不把查询失败视为废止。'
           gh release upload "$tag" reports/标准信息统计表_已核验.xlsx reports/标准信息核验结果.csv reports/核验摘要.json .github_release/核验证据.tar.gz --clobber
       - name: 自动启动下一片
         if: steps.audit.outputs.next == 'continue'

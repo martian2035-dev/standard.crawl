@@ -85,7 +85,7 @@ def test_supplement_preserves_sheets_values_formulas_and_literal_text(tmp_path):
 
 def test_audit_restore_requires_matching_month_and_input(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    make_workbook(github_monthly.INPUT)
+    github_monthly.INPUT.write_text("标准类型,标准号\n国内标准,GB1-2020\n", encoding="utf-8-sig")
     args = Namespace(campaign="2026-10", restore=True, budget_seconds=60, delay=0)
     with pytest.raises(ValueError, match="缺少前片"):
         github_monthly.audit(args)
@@ -98,7 +98,9 @@ def test_audit_restore_requires_matching_month_and_input(tmp_path, monkeypatch):
 
 def test_audit_end_to_end_with_fresh_online_result(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    make_workbook(github_monthly.INPUT)
+    github_monthly.INPUT.write_text("标准类型,标准号\n国内标准,GB1-2020\n", encoding="utf-8-sig")
+    # 同目录有私有原表时，云端流程也只能读取公开清单。
+    Path("标准信息统计表.xlsx").write_bytes(b"private-original-not-a-workbook")
     with Path("国家公开标准信息.csv").open("w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=crawler.NATIONAL_COLUMNS)
         writer.writeheader()
@@ -122,26 +124,28 @@ def test_audit_end_to_end_with_fresh_online_result(tmp_path, monkeypatch):
     assert Path("reports/标准信息统计表_已核验.xlsx").exists()
     assert Path(".github_release/核验证据.tar.gz").exists()
     book = load_workbook("reports/标准信息统计表_已核验.xlsx")
-    assert book["标准信息"]["B2"].value == "原状态"
-    headers = {c.value: c.column for c in book["标准信息"][1]}
-    assert book["标准信息"].cell(2, headers["核验状态"]).value == "废止"
+    sheet = book["标准核验结果"]
+    headers = {c.value: c.column for c in sheet[4]}
+    assert sheet.cell(5, headers["核验状态"]).value == "废止"
+    assert "文件名" not in headers and "备注" not in headers
+    assert not (github_monthly.AUDIT_STATE / "标准信息统计表.xlsx").exists()
     book.close()
 
 
 def test_export_excludes_history_database_and_local_state(tmp_path, monkeypatch):
     root = tmp_path / "source"
     root.mkdir()
-    names = ["main.py", "标准信息统计表.xlsx", "audit_inputs/manifest.json", "standard_db/standards.db", ".git/config", "local_audit/private.txt"]
+    names = ["README.md", "公开标准查询清单.csv", "标准信息统计表.xlsx", "audit_inputs/manifest.json", "standard_db/standards.db", ".git/config", "local_audit/private.txt", "debug.py", ".env", "notes.md"]
     for name in names:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("样本")
+    (root / "公开标准查询清单.csv").write_text("标准类型,标准号\n国内标准,GB1-2020\n", encoding="utf-8-sig")
     monkeypatch.setattr(export_github, "ROOT", root)
     monkeypatch.setattr(export_github.subprocess, "check_output", lambda *a, **k: "\0".join(names).encode())
     destination = tmp_path / "destination"
     export_github.export(destination)
-    assert sorted(p.name for p in destination.iterdir()) == ["audit_inputs", "main.py", "标准信息统计表.xlsx"]
-    assert (destination / "audit_inputs/manifest.json").exists()
+    assert sorted(p.name for p in destination.iterdir()) == ["README.md", "公开标准查询清单.csv"]
     with pytest.raises(ValueError, match="已存在"):
         export_github.export(destination)
 

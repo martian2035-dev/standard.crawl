@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# run_local.sh —— 本地跑流水线（与 CNB 上执行的是同一套脚本）
+# run_local.sh —— 本地运行标准采集与校验
 #
 #   bash scripts/run_local.sh                     # 抓 1 个分片 → 构建 → 校验
 #   bash scripts/run_local.sh --no-crawl          # 跳过抓取，只用现有 CSV 重建数据库

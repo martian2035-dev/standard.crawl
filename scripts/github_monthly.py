@@ -19,13 +19,13 @@ sys.path.insert(0, str(ROOT))
 import audit_pipeline
 import build_db
 import standard_crawl
-from audit_excel import supplement_workbook
+from scripts.public_input import PUBLIC_INPUT, validate_public
 
 CSV_FILES = ["国家公开标准信息.csv", "行业公开标准信息.csv", "地方公开标准信息.csv"]
 CRAWL_TASKS = ["national:1", "national:2", "national:3", "industry", "local"]
 CRAWL_STATE = Path(".github_crawl_state")
 AUDIT_STATE = Path(".github_audit_work")
-INPUT = Path("标准信息统计表.xlsx")
+INPUT = Path(PUBLIC_INPUT)
 
 
 def campaign(value=""):
@@ -85,7 +85,8 @@ def package_database(args):
 
 def audit(args):
     if not INPUT.exists():
-        raise ValueError("缺少根目录标准信息统计表.xlsx，请先将原表提交到 GitHub")
+        raise ValueError("缺少公开标准查询清单.csv，请在本地使用 public_input.py prepare 准备")
+    validate_public(INPUT)
     meta_path = AUDIT_STATE / "campaign.json"
     baseline = AUDIT_STATE / "results/历史基线/standards.db"
     if args.restore and not meta_path.exists():
@@ -130,7 +131,8 @@ def audit(args):
         audit_pipeline.merge(audit_pipeline.parse_args([
             "merge", str(INPUT), "--result-dir", str(AUDIT_STATE / "results"), "--output-dir", str(merged)]))
         report = Path("reports/标准信息统计表_已核验.xlsx")
-        supplement_workbook(INPUT, merged, report)
+        report.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(merged / "标准信息核验结果.xlsx", report)
         shutil.copyfile(merged / "标准信息核验结果.csv", "reports/标准信息核验结果.csv")
         audit_pipeline.atomic_json(Path("reports/核验摘要.json"), {**result, "月份": args.campaign})
         release = Path(".github_release")

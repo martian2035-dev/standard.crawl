@@ -8,7 +8,6 @@ import hashlib
 import json
 import shutil
 import sqlite3
-import subprocess
 from pathlib import Path
 
 import requests
@@ -283,38 +282,16 @@ def merge(args):
         store.conn.close()
 
 
-def pull(args):
-    from scripts.audit_artifacts import pull_result
-    input_path = args.input
-    if not input_path:
-        config = ROOT / "local_audit" / "本地输入配置.json"
-        if config.exists():
-            input_path = Path(json.loads(config.read_text())["原表路径"])
-        else:
-            input_path = Path.home() / "Downloads/standard_code/标准信息统计表.xlsx"
-    if not input_path.exists():
-        raise ValueError("原统计表不存在，请在拉取命令后指定原 Excel 路径")
-    args.input = input_path
-    expected = json.loads((ROOT / "audit_inputs/manifest.json").read_text())
-    if sha256(input_path) != expected["原表SHA256"]:
-        raise ValueError("本地原表与查询清单不匹配，拒绝下载合并")
-    args.result_dir = ROOT / "local_audit/download/latest"
-    commit = pull_result(args.branch, args.result_dir)
-    merge(args)
-    summary = args.result_dir / "运行摘要.json"
-    if summary.exists():
-        print(summary.read_text(), flush=True)
-    print(f"已拉取提交 {commit[:8]} 的成果。", flush=True)
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="统计表离线筛查及 CNB 独立联网核验")
+    parser = argparse.ArgumentParser(description="统计表离线筛查及分片联网核验")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "precheck", "run", "merge", "pull"):
+    for name in ("prepare", "precheck", "run", "merge"):
         p = sub.add_parser(name)
-        p.add_argument("input", type=Path, nargs="?" if name == "pull" else None)
-        p.add_argument("--output-dir", type=Path, default=ROOT / "local_audit" / ("verified" if name == "pull" else name))
-        if name not in ("merge", "pull"):
+        p.add_argument("input", type=Path)
+        p.add_argument("--output-dir", type=Path, default=ROOT / "local_audit" / name)
+        if name != "merge":
             p.add_argument("--db", type=Path, default=ROOT / "standard_db" / "standards.db")
         if name == "prepare":
             p.add_argument("--manifest-dir", type=Path, default=ROOT / "audit_inputs")
@@ -330,8 +307,6 @@ def parse_args(argv=None):
             p.add_argument("--retry-failed", action="store_true")
         if name == "merge":
             p.add_argument("--result-dir", type=Path, required=True)
-        if name == "pull":
-            p.add_argument("--branch", default="codex/standard-table-audit")
     args = parser.parse_args(argv)
     output = args.output_dir.resolve()
     if output == ROOT or any(output == ROOT / p or ROOT / p in output.parents for p in ("standard_db", ".crawl_state", ".git", "audit_inputs")):
@@ -355,13 +330,11 @@ def main(argv=None):
             return run(args)
         elif args.command == "merge":
             merge(args)
-        else:
-            pull(args)
         return 0
     except requests.RequestException as exc:
-        print("核验附件请求失败：" + type(exc).__name__, flush=True)
+        print("核验请求失败：" + type(exc).__name__, flush=True)
         return 1
-    except (ValueError, OSError, sqlite3.Error, subprocess.SubprocessError) as exc:
+    except (ValueError, OSError, sqlite3.Error) as exc:
         print("核验流水线失败：" + str(exc), flush=True)
         return 1
 

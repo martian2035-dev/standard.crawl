@@ -6,10 +6,20 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-EXCLUDED = {".git", "standard_db", ".crawl_state", ".github_crawl_state", ".github_audit_work",
-            ".github_release", "local_audit", ".venv", "__pycache__", "github-export", "reports"}
-SUFFIXES = {".py", ".sh", ".md", ".yml", ".yaml", ".csv", ".toml", ".lock", ".txt"}
-SPECIAL = {".gitignore", ".python-version", "标准信息统计表.xlsx", "audit_inputs/manifest.json"}
+# 显式列出公开文件，避免新出现的调试脚本、个人笔记或配置被自动带出。
+PUBLIC_FILES = {
+    ".gitignore", ".python-version", "README.md", "pyproject.toml", "uv.lock",
+    "requirements.txt", "requirements-audit.txt", "requirements-local.txt",
+    "standard_crawl.py", "standard_audit.py", "audit_excel.py", "audit_pipeline.py", "build_db.py",
+    "国家公开标准信息.csv", "行业公开标准信息.csv", "地方公开标准信息.csv", "工程建设标准信息.csv",
+    "公开标准查询清单.csv", "docs/统计表本地核验.md", "docs/GitHub迁移与月度任务.md",
+    "scripts/run_local.sh", "scripts/export_github.py", "scripts/github_monthly.py",
+    "scripts/github_commit.sh", "scripts/public_input.py",
+    ".github/workflows/monthly-crawl.yml", ".github/workflows/monthly-audit.yml", ".github/workflows/tests.yml",
+    "tests/test_audit_delivery.py", "tests/test_audit_pipeline.py", "tests/test_build_relations.py",
+    "tests/test_crawl_dataset.py", "tests/test_standard_audit.py", "tests/test_github_monthly.py",
+    "tests/test_public_input.py",
+}
 
 
 def export(destination):
@@ -24,18 +34,22 @@ def export(destination):
     selected = []
     for name in sorted(set(paths)):
         relative = Path(name)
-        if not name or any(p in EXCLUDED for p in relative.parts):
+        if name not in PUBLIC_FILES:
             continue
         source = ROOT / relative
         if source.is_symlink() or not source.is_file():
             continue
-        if relative.suffix not in SUFFIXES and name not in SPECIAL:
-            continue
         if source.stat().st_size >= 100 * 1024 * 1024:
             raise ValueError("文件超过 GitHub 普通 Git 限制：" + name)
         selected.append((source, relative))
-    if not any(str(relative) == "标准信息统计表.xlsx" for _, relative in selected):
-        raise ValueError("缺少标准信息统计表.xlsx，无法配置月度核验")
+    if not any(str(relative) == "公开标准查询清单.csv" for _, relative in selected):
+        raise ValueError("缺少公开标准查询清单.csv，请先在本地运行 public_input.py prepare")
+    # 只用标准库检查清单，导出命令无需安装 Excel 依赖。
+    import csv
+    with (ROOT / "公开标准查询清单.csv").open(encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames != ["标准类型", "标准号"] or any(None in row for row in reader):
+            raise ValueError("公开查询清单含额外字段，拒绝导出")
     destination.mkdir(parents=True)
     for source, relative in selected:
         target = destination / relative

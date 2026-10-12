@@ -2,9 +2,9 @@ name: 离线测试
 on:
   push:
     branches: [main]
-    paths: ['**.py', '**.sh', '**.txt', '.github/workflows/**', '.cnb.yml']
+    paths: ['**.py', '**.sh', '**.txt', '.github/workflows/**']
   pull_request:
-    paths: ['**.py', '**.sh', '**.txt', '.github/workflows/**', '.cnb.yml']
+    paths: ['**.py', '**.sh', '**.txt', '.github/workflows/**']
 permissions:
   contents: read
 jobs:

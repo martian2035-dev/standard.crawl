@@ -1,9 +1,5 @@
 """自动续跑、跨提交恢复、Excel 日期及文本安全的离线验证。"""
-import contextlib
-import io
 import json
-import os
-import tarfile
 import tempfile
 import time
 import unittest
@@ -14,53 +10,12 @@ from openpyxl import load_workbook
 
 from audit_excel import export_excel
 from audit_pipeline import parse_args, precheck, prepare, run
-from scripts import audit_artifacts
 from standard_audit import Fetcher, LocalStore
 from test_audit_pipeline import make_fixture
 
 
 class DeliveryTests(unittest.TestCase):
-    def test_automatic_next_requires_completed_chunk_and_current_branch(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "运行摘要.json").write_text('{"自动续跑":true}')
-            client = Mock()
-            client.get_json.return_value = [{"sha": "a" * 40}]
-            with patch.object(audit_artifacts, "RESULT", root), patch.object(audit_artifacts, "cloud_client", return_value=client), \
-                 patch.dict(os.environ, {"CNB_COMMIT": "a" * 40}):
-                output = io.StringIO()
-                with contextlib.redirect_stdout(output):
-                    audit_artifacts.next_action()
-                self.assertIn("audit_next=stop", output.getvalue())
-                client.get_json.assert_not_called()
-                (root / "本片完成.flag").touch()
-                output = io.StringIO()
-                with contextlib.redirect_stdout(output):
-                    audit_artifacts.next_action()
-                self.assertIn("audit_next=continue", output.getvalue())
-                client.get_json.return_value = [{"sha": "b" * 40}]
-                output = io.StringIO()
-                with contextlib.redirect_stdout(output):
-                    audit_artifacts.next_action()
-                self.assertIn("audit_next=stop", output.getvalue())
 
-    def test_restore_skips_different_input_and_finds_previous_commit(self):
-        expected = dict(zip(audit_artifacts.MATCH_KEYS, ["original", "projection", "baseline"]))
-        client = Mock()
-        client.get_json.return_value = [{"name": audit_artifacts.ARCHIVE}]
-        def download(commit, asset, target):
-            metadata = expected if commit == "previous" else {**expected, "原表SHA256": "different"}
-            with tarfile.open(target, "w:gz") as tar:
-                raw = json.dumps(metadata).encode()
-                info = tarfile.TarInfo("audit_result/输入映射.json")
-                info.size = len(raw)
-                tar.addfile(info, io.BytesIO(raw))
-        client.download.side_effect = download
-        with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "out"
-            commit = audit_artifacts.find_result(client, ["current", "previous"], expected, destination)
-            self.assertEqual(commit, "previous")
-            self.assertEqual(json.loads((destination / "输入映射.json").read_text()), expected)
 
     def test_excel_keeps_dates_duplicate_rows_evidence_and_literal_text(self):
         with tempfile.TemporaryDirectory() as directory:
