@@ -1,30 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-standard_crawl.py —— 标准信息采集器（断点续爬 + 进度持久化）
+"""Collect standards in resumable, time-bounded chunks.
 
-为什么这么设计
---------------
-完整扫描可能跨越多次运行，因此采集器支持：
+Page cursors are persisted in .crawl_state/state.json and CSV files are saved
+atomically at checkpoints. This command collects data; build_db.py builds SQLite.
+A new monthly campaign rescans from page 1 to discover new and changed records.
 
-1. **页面游标持久化**：每个采集任务的进度写入 ``.crawl_state/state.json``，
-   每抓到若干页就把 CSV 原子落盘。容器被 SIGKILL 也不会丢掉已抓到的数据。
-2. **时间盒分片**：``--budget-seconds`` 到点后主动优雅退出，本片成果已落盘，
-   下一片从游标继续。一次「采集行动(campaign)」可跨多次流水线完成。
-3. **采集与构建解耦**：本脚本只产出 CSV + 进度状态，不生成 standard_db。
-
-用法
-----
-    python standard_crawl.py                      # 跑一个分片（默认预算 4500 秒）
-    python standard_crawl.py --new-campaign       # 开启新采集行动（游标归零）
+Examples:
+    python standard_crawl.py --new-campaign
     python standard_crawl.py --only industry --budget-seconds 60 --max-pages 5
-    python standard_crawl.py --status             # 查看进度
-    python standard_crawl.py --emit-next          # 输出下一步动作（配合 exports）
+    python standard_crawl.py --status
+    python standard_crawl.py --emit-next
 
-退出码
-------
-    0   本片正常结束（预算到点 / 全部采集完成）
-    1   本片无任何进展，或超过最大分片数 —— 流水线应报错并停止链式调用
+Exit codes: 0 for a completed chunk; 1 for no progress or the chunk limit.
 """
 
 from __future__ import annotations
@@ -49,7 +37,7 @@ STATE_DIR = Path(".crawl_state")
 STATE_FILE = "state.json"
 STATUS_FILE = "status.json"
 
-# 请求头（模拟浏览器，防止被拦截）
+# Browser-compatible request headers.
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
@@ -58,7 +46,7 @@ HEADERS = {
 
 BASE_URL = "https://openstd.samr.gov.cn/bzgk/gb/std_list_type"
 
-# 国家标准分类
+# National standard categories.
 STD_TYPES = {
     "1": "强制性国家标准",
     "2": "推荐性国家标准",
@@ -69,12 +57,12 @@ NATIONAL_COLUMNS = [
     "标准类型", "序号", "标准号", "是否采标",
     "标准名称", "状态", "发布日期", "实施日期",
 ]
-# 「代替标准」「主管部门」来自备案平台列表接口本身返回的 reviseStdCodes、chargeDept，不增加请求
+# Replacement and authority fields come from reviseStdCodes and chargeDept without extra requests.
 SACINFO_EXTRA_COLUMNS = ["代替标准", "主管部门"]
 SACINFO_COLUMNS = ["标准号", "标准名称", "行业领域", "状态", "批准日期", "实施日期"] + SACINFO_EXTRA_COLUMNS
 SACINFO_COLUMNS_LOCAL = ["标准号", "标准名称", "省市区", "状态", "批准日期", "实施日期"] + SACINFO_EXTRA_COLUMNS
-# 工程建设标准：国家工程建设标准化信息网（住房和城乡建设部标准定额研究所）的标准查询接口，
-# 收录住建部管理的现行工程建设国标、行标及建工、城建产品标准；国家标准与行业标准备案平台不收录这些标准
+# Engineering standards come from the ministry engineering standardization query API.
+# This source includes engineering and construction product standards absent from other registries.
 CCSN_API = "https://www.ccsn.org.cn/newweb/api/StandardQuery.assx/queryStandard"
 CCSN_REFERER = "https://www.ccsn.org.cn/newweb/standardQuery"
 CCSN_COLUMNS = ["标准号", "标准名称", "标准类型", "专业领域", "状态", "发布日期", "实施日期",
@@ -82,7 +70,7 @@ CCSN_COLUMNS = ["标准号", "标准名称", "标准类型", "专业领域", "�
 
 
 # --------------------------------------------------------------------------- #
-# 采集任务定义
+# Collection task definitions.
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class Task:
@@ -91,32 +79,32 @@ class Task:
     filename: str
     kind: str               # national | sacinfo | ccsn
     columns: tuple
-    p1_type: str = ""       # national：分类编号
-    api: str = ""           # sacinfo：接口地址
-    place_column: str = ""  # sacinfo：行业领域 / 省市区
+    p1_type: str = ""       # National category identifier.
+    api: str = ""           # Registry API URL.
+    place_column: str = ""  # Registry industry or region field.
 
 
 TASKS: list[Task] = [
-    Task("national:1", "强制性国家标准", "国家公开标准信息.csv", "national",
+    Task("national:1", "Mandatory national standards", "国家公开标准信息.csv", "national",
          tuple(NATIONAL_COLUMNS), p1_type="1"),
-    Task("national:2", "推荐性国家标准", "国家公开标准信息.csv", "national",
+    Task("national:2", "Recommended national standards", "国家公开标准信息.csv", "national",
          tuple(NATIONAL_COLUMNS), p1_type="2"),
-    Task("national:3", "指导性技术文件", "国家公开标准信息.csv", "national",
+    Task("national:3", "National guidance documents", "国家公开标准信息.csv", "national",
          tuple(NATIONAL_COLUMNS), p1_type="3"),
-    Task("industry", "行业标准", "行业公开标准信息.csv", "sacinfo",
+    Task("industry", "Industry standards", "行业公开标准信息.csv", "sacinfo",
          tuple(SACINFO_COLUMNS),
          api="https://hbba.sacinfo.org.cn/stdQueryList", place_column="行业领域"),
-    Task("local", "地方标准", "地方公开标准信息.csv", "sacinfo",
+    Task("local", "Local standards", "地方公开标准信息.csv", "sacinfo",
          tuple(SACINFO_COLUMNS_LOCAL),
          api="https://dbba.sacinfo.org.cn/stdQueryList", place_column="省市区"),
-    Task("engineering", "工程建设标准", "工程建设标准信息.csv", "ccsn",
+    Task("engineering", "Engineering standards", "工程建设标准信息.csv", "ccsn",
          tuple(CCSN_COLUMNS), api=CCSN_API),
 ]
 TASK_BY_KEY = {t.key: t for t in TASKS}
 
 
 # --------------------------------------------------------------------------- #
-# 工具
+# Utilities.
 # --------------------------------------------------------------------------- #
 def log(msg: str = "") -> None:
     sys.stdout.write(msg + "\n")
@@ -141,7 +129,7 @@ def format_date(epoch_millis) -> str:
 
 
 def fetch_with_retry(method, url, max_retries=5, **kwargs):
-    """带指数退避的网络请求封装，抵御偶发 503 / timeout。"""
+    """Retry transient network failures with exponential backoff."""
     timeout = kwargs.pop("timeout", 15)
     for attempt in range(max_retries):
         try:
@@ -155,27 +143,20 @@ def fetch_with_retry(method, url, max_retries=5, **kwargs):
             if attempt == max_retries - 1:
                 raise
             wait = 2 ** attempt
-            log("[自动重试] 网络波动或拦截 (%s)，%d 秒后第 %d 次重试..." % (exc, wait, attempt + 1))
+            log("[RETRY] Network error or restriction (%s); waiting %d seconds before retry %d..." % (exc, wait, attempt + 1))
             time.sleep(wait)
     raise RuntimeError("unreachable")  # pragma: no cover
 
 
 # --------------------------------------------------------------------------- #
-# 数据集：一个 CSV 对应一个 Dataset，负责去重与原子落盘
+# One Dataset per CSV, with deduplication and atomic persistence.
 # --------------------------------------------------------------------------- #
 class Dataset:
-    """按「标准号」去重并更新，以原子替换的方式写 CSV。
+    """Deduplicate and update by standard number, then save CSV atomically. Older dated records never replace newer ones."""
 
-    原子替换（临时文件 + os.replace）保证磁盘上的 CSV 任何时刻都是完整的，
-    不会因为写到一半被杀而留下半个文件。
-
-    同一标准号再次抓到时：内容有变化就更新已有行（标准的状态会随时间从「现行」变为
-    「废止」「有更新版」，新增的列也靠这一步回填）；两条记录日期不同时保留日期较新的。
-    """
-
-    # 用来比较新旧的日期列：国家标准为「发布日期」，行业 / 地方标准为「批准日期」
+    # Compare publication dates for national records and approval dates for industry/local records.
     DATE_COLUMNS = ("发布日期", "批准日期")
-    # 随抓取时刻变化、不代表标准本身变化的列，不参与「内容是否有变化」的判断
+    # Ignore fields that change with collection time rather than with the standard itself.
     VOLATILE_COLUMNS = ("序号",)
 
     def __init__(self, path: Path, columns: Iterable[str]):
@@ -200,7 +181,7 @@ class Dataset:
         try:
             df = pd.read_csv(self.path, dtype=str, encoding="utf-8-sig", keep_default_na=False)
         except Exception as exc:
-            raise ValueError("历史 CSV 无法读取，停止以免覆盖已有数据：%s" % self.path) from exc
+            raise ValueError("Cannot read existing CSV; stopped to prevent data loss: %s" % self.path) from exc
         self.rows = df.to_dict("records")
         self.index = {}
         for pos, row in enumerate(self.rows):
@@ -212,7 +193,7 @@ class Dataset:
         return any(str(new.get(c, "") or "") != str(old.get(c, "") or "") for c in self.compare_columns)
 
     def _is_older(self, new: dict, old: dict) -> bool:
-        """新抓到的记录日期早于已有记录（同号的旧版备案）时不覆盖。"""
+        """Prevent an older registration of the same standard from overwriting newer data."""
         if not self.date_column:
             return False
         new_date = str(new.get(self.date_column, "") or "")
@@ -220,7 +201,7 @@ class Dataset:
         return bool(new_date and old_date and new_date < old_date)
 
     def add(self, row: dict) -> bool:
-        """新标准号入库返回 True；已有标准号只在内容变化时更新该行，返回 False。"""
+        """Return True for a new standard; update changed existing rows and return False."""
         code = str(row.get("标准号", "")).strip()
         if not code:
             return False
@@ -255,15 +236,15 @@ class Dataset:
 
 
 # --------------------------------------------------------------------------- #
-# 进度状态
+# Progress state.
 # --------------------------------------------------------------------------- #
 def blank_task_state() -> dict:
     return {
-        "page": 0,               # 已成功落盘的最后一页（0 = 尚未开始）
+        "page": 0,               # Last successfully persisted page; 0 means not started.
         "total_pages": None,
         "finished": False,
-        "pages_fetched": 0,      # 累计抓取页数（含跳过页）
-        "rows_added": 0,         # 累计新增条数
+        "pages_fetched": 0,      # Total pages visited, including skipped pages.
+        "rows_added": 0,         # Total newly added records.
         "failures": 0,
         "skipped_pages": [],
         "last_error": "",
@@ -290,10 +271,10 @@ def load_state(state_dir: Path) -> dict:
     try:
         st = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
-        log("[警告] 进度文件损坏（%s），将重新开始" % exc)
+        log("[WARNING] Corrupt progress file (%s); starting over" % exc)
         return blank_state(current_campaign_id())
     st.setdefault("tasks", {})
-    for t in TASKS:  # 兼容后续新增任务
+    for t in TASKS:  # Support tasks added after the checkpoint was created.
         st["tasks"].setdefault(t.key, blank_task_state())
     st.setdefault("campaign", current_campaign_id())
     st.setdefault("chunks", 0)
@@ -316,22 +297,17 @@ def save_status(state_dir: Path, status: dict) -> None:
 
 
 def start_new_campaign(state_dir: Path, campaign: str) -> dict:
-    """游标归零，开启一次全新的采集行动。
-
-    为什么每月都从第 1 页重扫：列表按发布日期倒序，新增标准会插到最前面，
-    只从上次断点往后扫会漏掉新条目。旧数据靠「标准号」去重，不会重复入库；
-    已有标准的状态等内容有变化时，全量重扫会把对应行更新为最新值。
-    """
+    """Reset page cursors for a full rescan that discovers new entries and updates existing statuses."""
     st = blank_state(campaign)
     save_state(state_dir, st)
     return st
 
 
 # --------------------------------------------------------------------------- #
-# 单页抓取
+# Fetch one page.
 # --------------------------------------------------------------------------- #
 def get_page_data_national(p1_type: str, page: int, page_size: int):
-    """返回 (行列表 或 None, 总页数, 总条数)。None 表示这一页不可用。"""
+    """Return (rows or None, total pages, total records). None means the page is unavailable."""
     params = {
         "p.p1": p1_type,
         "p.p90": "circulation_date",
@@ -358,7 +334,7 @@ def get_page_data_national(p1_type: str, page: int, page_size: int):
         if table is None:
             return None, total_pages, total_records
         if not match:
-            # 页面结构变化不能被误判为只有一页，从而发布不完整数据库。
+            # Never interpret a page layout change as a single-page result and publish an incomplete database.
             return None, 0, 0
 
         rows = []
@@ -380,25 +356,25 @@ def get_page_data_national(p1_type: str, page: int, page_size: int):
             return None, total_pages, total_records
         return rows, total_pages, total_records
     except Exception as exc:
-        log("[错误] 国家标准 %s 第 %d 页抓取失败：%s"
+        log("[ERROR] National standard type %s page %d failed: %s"
             % (STD_TYPES.get(p1_type, p1_type), page, exc))
         return None, 0, 0
 
 
 def get_page_data_sacinfo(task: Task, page: int, page_size: int):
-    """返回 (行列表 或 None, 总页数)。None 表示这一页不可用。"""
+    """Return (rows or None, total pages). None means the page is unavailable."""
     payload = {"current": page, "size": page_size, "key": "", "status": ""}
     try:
         resp = fetch_with_retry("POST", task.api, headers=HEADERS, data=payload)
         res = resp.json()
     except Exception as exc:
-        log("[错误] %s 第 %d 页抓取失败：%s" % (task.label, page, exc))
+        log("[ERROR] %s page %d failed: %s" % (task.label, page, exc))
         return None, 0
 
     if (not isinstance(res, dict) or not isinstance(res.get("records"), list)
             or not isinstance(res.get("pages"), int) or res["pages"] < 1
             or not res["records"] or any(not isinstance(r, dict) or not r.get("code") for r in res["records"])):
-        log("[错误] %s 响应缺少有效分页或标准记录，停止本页" % task.label)
+        log("[ERROR] %s response has no valid pagination or standards; stopping this page" % task.label)
         return None, 0
     total_pages = res["pages"]
     rows = []
@@ -417,19 +393,19 @@ def get_page_data_sacinfo(task: Task, page: int, page_size: int):
 
 
 def iso_date(value) -> str:
-    """'2017-09-27T00:00:00' → '2017-09-27'；空值返回空串。"""
+    """Extract YYYY-MM-DD from an ISO timestamp; return an empty string for an empty value."""
     return str(value or "")[:10]
 
 
 def get_page_data_ccsn(task: Task, page: int, page_size: int):
-    """返回 (行列表 或 None, 总页数)。None 表示这一页不可用。"""
+    """Return (rows or None, total pages). None means the page is unavailable."""
     payload = {"gjz": "", "pageIndex": page, "pageSize": page_size}
     headers = dict(HEADERS, Referer=CCSN_REFERER)
     try:
         resp = fetch_with_retry("POST", task.api, headers=headers, data=payload, timeout=60)
         res = resp.json()
     except Exception as exc:
-        log("[错误] %s 第 %d 页抓取失败：%s" % (task.label, page, exc))
+        log("[ERROR] %s page %d failed: %s" % (task.label, page, exc))
         return None, 0
 
     rows = []
@@ -449,7 +425,7 @@ def get_page_data_ccsn(task: Task, page: int, page_size: int):
 
 
 # --------------------------------------------------------------------------- #
-# 时间预算
+# Time budget.
 # --------------------------------------------------------------------------- #
 class Budget:
     def __init__(self, seconds: float):
@@ -468,10 +444,10 @@ class Budget:
 
 
 # --------------------------------------------------------------------------- #
-# 采集主循环
+# Collection loop.
 # --------------------------------------------------------------------------- #
 def crawl_task(task: Task, st: dict, ds: Dataset, budget: Budget, args) -> str:
-    """采集单个任务，直到 完成 / 预算耗尽 / 页数上限。返回结束原因。"""
+    """Collect one task until completion or a budget/page limit; return the stop reason."""
     page = int(st["page"]) + 1
     fetched = 0
     consecutive_failures = 0
@@ -502,9 +478,9 @@ def crawl_task(task: Task, st: dict, ds: Dataset, budget: Budget, args) -> str:
                     ds.save()
                     save_state(args.state_dir, args.state)
                     return "upstream-error"
-                # 保证「每次分片必须前进」，否则链式调用会永久卡死在同一页
+                # Require progress to avoid an endless continuation loop on one page.
                 st["skipped_pages"].append(page)
-                log("[跳过] %s 第 %d 页连续 %d 次不可用，记录后继续"
+                log("[SKIP] %s page %d unavailable after %d attempts; recorded and continuing"
                     % (task.label, page, consecutive_failures))
                 st["page"] = page
                 st["pages_fetched"] += 1
@@ -531,13 +507,13 @@ def crawl_task(task: Task, st: dict, ds: Dataset, budget: Budget, args) -> str:
 
         total = st["total_pages"] or 1
         sys.stdout.write(
-            "\r⏳ [%s] 第 %d/%d 页 (%.1f%%) | 本库 %d 条 | 本片 %d 页 | 新增 %d | 剩余 %ds"
+            "\r⏳ [%s] page %d/%d (%.1f%%) | %d stored | %d pages this chunk | %d added | %ds remaining"
             % (task.label, st["page"], total, st["page"] / total * 100,
                len(ds), fetched, task_added, budget.remaining())
         )
         sys.stdout.flush()
 
-        # 定期落盘：容器被强杀最多丢 checkpoint_every 页
+        # Checkpoint periodically; a forced shutdown can lose at most checkpoint_every pages.
         if fetched % args.checkpoint_every == 0:
             ds.save()
             save_state(args.state_dir, args.state)
@@ -548,7 +524,7 @@ def crawl_task(task: Task, st: dict, ds: Dataset, budget: Budget, args) -> str:
             st["rows_added"] += task_added
             ds.save()
             save_state(args.state_dir, args.state)
-            log("\n✅ [%s] 采集完成：%d 页，本库共 %d 条" % (task.label, st["page"], len(ds)))
+            log("\n[%s] Collection complete: %d pages, %d stored records" % (task.label, st["page"], len(ds)))
             return "finished"
 
         page += 1
@@ -561,12 +537,12 @@ def run_chunk(args) -> dict:
 
     if args.new_campaign:
         campaign = args.campaign or current_campaign_id()
-        log("🚩 开启新的采集行动：%s（游标归零，全量重扫，靠标准号去重）" % campaign)
+        log("Starting campaign %s (reset cursors, full rescan, deduplicate by standard number)" % campaign)
         st = start_new_campaign(state_dir, campaign)
     else:
         st = load_state(state_dir)
         if args.campaign and st.get("campaign") != args.campaign:
-            log("🚩 采集行动切换：%s → %s，游标归零" % (st.get("campaign"), args.campaign))
+            log("Campaign changed: %s -> %s; cursors reset" % (st.get("campaign"), args.campaign))
             st = start_new_campaign(state_dir, args.campaign)
 
     args.state = st
@@ -578,11 +554,11 @@ def run_chunk(args) -> dict:
     args.budget = budget
 
     log("=" * 74)
-    log("标准信息采集器（断点续爬 + 进度持久化）")
-    log("  采集行动 : %s" % st["campaign"])
-    log("  分片序号 : 第 %d 片" % st["chunks"])
-    log("  时间预算 : %d 秒" % args.budget_seconds)
-    log("  开始时间 : %s" % now_iso())
+    log("Standards collector with persistent checkpoints")
+    log("  Campaign: %s" % st["campaign"])
+    log("  Chunk: %d" % st["chunks"])
+    log("  Time budget: %d seconds" % args.budget_seconds)
+    log("  Started at: %s" % now_iso())
     log("=" * 74)
 
     datasets: dict[str, Dataset] = {}
@@ -592,7 +568,7 @@ def run_chunk(args) -> dict:
     for task in tasks:
         tst = st["tasks"][task.key]
         if tst["finished"]:
-            log("⏭️  [%s] 已完成，跳过" % task.label)
+            log("[%s] Already complete; skipping" % task.label)
             continue
         if budget.expired():
             reason = "budget"
@@ -602,14 +578,14 @@ def run_chunk(args) -> dict:
         if ds is None:
             ds = Dataset(Path(task.filename), task.columns)
             datasets[task.filename] = ds
-            log("📦 [%s] 载入历史记录 %d 条" % (task.filename, len(ds)))
+            log("[%s] Loaded %d existing records" % (task.filename, len(ds)))
 
         result = crawl_task(task, tst, ds, budget, args)
         if result in ("budget", "page-limit", "upstream-error"):
             reason = result
             break
 
-    # 收尾：所有脏数据集落盘 + 状态落盘
+    # Flush dirty datasets and state at the end of the chunk.
     for ds in datasets.values():
         ds.save()
     save_state(state_dir, st)
@@ -653,36 +629,36 @@ def run_chunk(args) -> dict:
 
     log("")
     log("-" * 74)
-    log("本片结束：%s" % reason)
+    log("Chunk finished: %s" % reason)
     for task in TASKS:
         tst = st["tasks"][task.key]
-        log("  %-18s %s/%s 页  完成=%-5s 累计新增=%d%s"
+        log("  %-18s %s/%s pages  complete=%-5s total added=%d%s"
             % (task.label, tst["page"], tst["total_pages"], tst["finished"],
                tst["rows_added"],
-               ("  跳过页=%s" % tst["skipped_pages"]) if tst["skipped_pages"] else ""))
-    log("  本片抓取 : %d 页 / 新增 %d 条 / 更新 %d 条"
+               ("  skipped pages=%s" % tst["skipped_pages"]) if tst["skipped_pages"] else ""))
+    log("  This chunk: %d pages / %d added / %d updated"
         % (pages_this_run, rows_this_run, rows_updated_this_run))
-    log("  耗时     : %.1f 秒" % status["elapsed_seconds"])
-    log("  下一步   : %s" % next_action)
+    log("  Elapsed: %.1f seconds" % status["elapsed_seconds"])
+    log("  Next step: %s" % next_action)
     log("-" * 74)
 
     return status
 
 
 # --------------------------------------------------------------------------- #
-# 只读命令
+# Read-only commands.
 # --------------------------------------------------------------------------- #
 def print_status(args) -> int:
     st = load_state(args.state_dir)
     status_path = args.state_dir / STATUS_FILE
     status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.exists() else {}
 
-    log("采集行动 : %s" % st.get("campaign"))
-    log("状态更新 : %s" % st.get("updated_at"))
-    log("累计分片 : %s" % st.get("chunks"))
+    log("Campaign: %s" % st.get("campaign"))
+    log("State updated: %s" % st.get("updated_at"))
+    log("Total chunks: %s" % st.get("chunks"))
     log("")
     log("%-20s %-10s %-10s %-8s %-8s %s"
-        % ("任务", "已抓页", "总页数", "已完成", "新增条数", "跳过页"))
+        % ("Task", "Pages", "Total pages", "Complete", "Added", "Skipped"))
     for task in TASKS:
         tst = st["tasks"][task.key]
         log("%-20s %-10s %-10s %-8s %-8s %s"
@@ -690,13 +666,13 @@ def print_status(args) -> int:
                tst.get("rows_added"), tst.get("skipped_pages") or "-"))
     log("")
     if status:
-        log("上一次分片：reason=%s  耗时=%ss  →  下一步=%s"
+        log("Last chunk: reason=%s  elapsed=%ss  next=%s"
             % (status.get("reason"), status.get("elapsed_seconds"), status.get("next_action")))
     return 0
 
 
 def emit_next(args) -> int:
-    """输出 ##[set-output crawl_next=...]，供流水线 exports 使用。"""
+    """Emit the crawl_next output for workflow continuation."""
     status_path = args.state_dir / STATUS_FILE
     if not status_path.exists():
         action = "crawl"
@@ -708,30 +684,30 @@ def emit_next(args) -> int:
 
 # --------------------------------------------------------------------------- #
 def parse_args(argv=None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="标准信息采集器（断点续爬 + 进度持久化）")
+    p = argparse.ArgumentParser(description="Standards collector with persistent checkpoints")
     p.add_argument("--budget-seconds", type=int,
                    default=int(os.environ.get("CRAWL_BUDGET_SECONDS", 4500)),
-                   help="本片时间预算（秒），默认 4500（75 分钟），留足提交/推送时间")
+                   help="Chunk time budget in seconds; default 4500 (75 minutes), allowing time to commit and push")
     p.add_argument("--checkpoint-every", type=int, default=25,
-                   help="每抓多少页把 CSV 落盘一次，默认 25")
-    p.add_argument("--page-size", type=int, default=50, help="每页条数，默认 50")
-    p.add_argument("--delay", type=float, default=0.4, help="每页之间的间隔秒数，默认 0.4")
+                   help="Save CSV every N pages; default 25")
+    p.add_argument("--page-size", type=int, default=50, help="Records per page; default 50")
+    p.add_argument("--delay", type=float, default=0.4, help="Delay between pages in seconds; default 0.4")
     p.add_argument("--page-retries", type=int, default=3,
-                   help="单页连续失败多少次后跳过（保证分片有前进），默认 3")
+                   help="Skip a page after N consecutive failures; default 3")
     p.add_argument("--strict-pages", action="store_true",
-                   help="单页重试耗尽后暂停并保留游标，不跳过失败页（GitHub 月度采集启用）")
+                   help="Pause with cursor preserved after page retries are exhausted (enabled for monthly GitHub runs)")
     p.add_argument("--max-pages", type=int, default=0,
-                   help="本片最多抓多少页（0=不限制），调试用")
+                   help="Maximum pages this chunk for debugging; 0 means unlimited")
     p.add_argument("--max-chunks", type=int, default=24,
-                   help="一次采集行动最多允许的分片数，防止链式调用失控")
+                   help="Maximum chunks per campaign to bound automatic continuation")
     p.add_argument("--only", action="append", choices=[t.key for t in TASKS],
-                   help="只采集指定任务，可重复；默认全部")
+                   help="Collect only this task; may be repeated; defaults to all")
     p.add_argument("--new-campaign", action="store_true",
-                   help="开启新的采集行动（游标归零）")
-    p.add_argument("--campaign", default="", help="指定采集行动标识，默认当前年月")
-    p.add_argument("--state-dir", type=Path, default=STATE_DIR, help="进度状态目录")
-    p.add_argument("--status", action="store_true", help="打印当前进度后退出")
-    p.add_argument("--emit-next", action="store_true", help="输出下一步动作后退出")
+                   help="Start a new campaign and reset page cursors")
+    p.add_argument("--campaign", default="", help="Campaign identifier; defaults to the current year and month")
+    p.add_argument("--state-dir", type=Path, default=STATE_DIR, help="Progress state directory")
+    p.add_argument("--status", action="store_true", help="Print progress and exit")
+    p.add_argument("--emit-next", action="store_true", help="Print the next action and exit")
     args = p.parse_args(argv)
     args.state = {}
     args.budget = Budget(args.budget_seconds)
@@ -750,9 +726,9 @@ def main(argv=None) -> int:
 
     if status["next_action"] == "stop":
         log("")
-        log("❌ 采集无法继续：本片没有取得任何进展（%s），或已超过最大分片数(%d)。"
+        log("Crawl cannot continue: no progress this chunk (%s) or chunk limit (%d) exceeded."
             % (status["reason"], args.max_chunks))
-        log("   请检查网络与上游站点可用性，然后从当前采集行动的断点继续。")
+        log("   Check network and upstream availability, then resume the current campaign.")
         return 1
     return 0
 

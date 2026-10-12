@@ -1,13 +1,13 @@
-name: 每月更新标准列表与数据库
+name: Monthly standards collection
 
 on:
   schedule:
-    # UTC 每月 1 日 19:43，即北京时间每月 2 日 03:43。
+    # 19:43 UTC on day 1 = 03:43 Asia/Shanghai on day 2.
     - cron: '43 19 1 * *'
   workflow_dispatch:
     inputs:
       campaign:
-        description: '月份 YYYY-MM；留空为北京时间本月；相同月份从断点继续'
+        description: 'Campaign YYYY-MM; empty uses the current Asia/Shanghai month; same month resumes'
         type: string
         default: ''
 
@@ -41,15 +41,15 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-audit.txt
-      - name: 安装依赖
+      - name: Install dependencies
         run: python -m pip install -r requirements.txt -r requirements-audit.txt
-      - name: 采集一个分片，遇到失败页保留断点
+      - name: Collect one chunk and preserve the cursor on failure
         id: crawl
         run: python scripts/github_monthly.py crawl --budget-seconds 3600 --delay 1
-      - name: 保存本片 CSV 和游标（失败时也保存已完成的部分）
+      - name: Save CSV files and cursors, including partial progress on failure
         if: always() && steps.crawl.outcome != 'skipped'
         run: bash scripts/github_commit.sh 国家公开标准信息.csv 行业公开标准信息.csv 地方公开标准信息.csv .github_crawl_state
-      - name: 上传进度，便于诊断
+      - name: Upload progress for diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -57,20 +57,20 @@ jobs:
           path: .github_crawl_state/
           include-hidden-files: true
           retention-days: 7
-      - name: 全部采集完成后构建并校验数据库
+      - name: Build and verify the database after collection completes
         if: steps.crawl.outputs.next == 'build'
         env:
           CAMPAIGN: ${{ steps.crawl.outputs.campaign }}
         run: python scripts/github_monthly.py database
-      - name: 发布月度数据库和 CSV
+      - name: Publish the monthly database and CSV files
         if: steps.crawl.outputs.next == 'build'
         env:
           CAMPAIGN: ${{ steps.crawl.outputs.campaign }}
         run: |
           tag="standards-${CAMPAIGN}"
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --target "$(git rev-parse HEAD)" --title "标准数据库 ${CAMPAIGN}" --notes '包含月度扫描后的标准列表、SQLite 压缩包与校验清单。解压数据库后可用 build_db.py --verify 校验。'
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --target "$(git rev-parse HEAD)" --title "Standards database ${CAMPAIGN}" --notes 'Monthly standards lists, compressed SQLite database and integrity manifest. Extract the database and run build_db.py --verify to check it.'
           gh release upload "$tag" .github_release/standards.db.gz .github_release/manifest.json 国家公开标准信息.csv 行业公开标准信息.csv 地方公开标准信息.csv --clobber
-      - name: 自动启动下一片
+      - name: Start the next chunk
         if: steps.crawl.outputs.next == 'crawl'
         env:
           CAMPAIGN: ${{ steps.crawl.outputs.campaign }}

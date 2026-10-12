@@ -1,17 +1,17 @@
-name: 每月联网核验统计表
+name: Monthly standards audit
 
 on:
   schedule:
-    # UTC 每月 4 日 20:17，即北京时间每月 5 日 04:17。
+    # 20:17 UTC on day 4 = 04:17 Asia/Shanghai on day 5.
     - cron: '17 20 4 * *'
   workflow_dispatch:
     inputs:
       campaign:
-        description: '月份 YYYY-MM；留空为北京时间本月'
+        description: 'Campaign YYYY-MM; empty uses the current Asia/Shanghai month'
         type: string
         default: ''
       restore_run_id:
-        description: '续跑所用的前片 Actions 运行 ID；留空开始新的全表核验'
+        description: 'Previous Actions run ID to resume; empty starts a new full audit'
         type: string
         default: ''
 
@@ -46,9 +46,9 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-audit.txt
-      - name: 安装依赖
+      - name: Install dependencies
         run: python -m pip install -r requirements.txt -r requirements-audit.txt
-      - name: 恢复前一片检查点；附件缺失时立即失败
+      - name: Restore the previous checkpoint; fail if missing
         if: inputs.restore_run_id != '' && inputs.restore_run_id != null
         uses: actions/download-artifact@v4
         with:
@@ -56,13 +56,13 @@ jobs:
           run-id: ${{ inputs.restore_run_id }}
           name: audit-checkpoint
           path: .github_audit_work/
-      - name: 官方网站逐项检索并核实状态、日期和替代版本
+      - name: Verify status, dates and replacements against official sources
         id: audit
         run: |
           args=()
           if [[ -n "$RESTORE_RUN_ID" ]]; then args+=(--restore); fi
           python scripts/github_monthly.py audit --budget-seconds 3600 --delay 5 "${args[@]}"
-      - name: 保存检查点（续片必须等上传成功）
+      - name: Save the checkpoint before continuing
         if: always() && steps.audit.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
@@ -72,18 +72,18 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 7
-      - name: 回写补充表和摘要
+      - name: Commit audited workbook and summary
         if: steps.audit.outputs.next == 'done'
-        run: bash scripts/github_commit.sh reports/标准信息统计表_已核验.xlsx reports/标准信息核验结果.csv reports/核验摘要.json
-      - name: 发布当月补充表和网页证据
+        run: bash scripts/github_commit.sh reports/standards-audited.xlsx reports/audit-results.csv reports/audit-summary.json
+      - name: Publish the monthly audited workbook and evidence
         if: steps.audit.outputs.next == 'done'
         env:
           CAMPAIGN: ${{ steps.audit.outputs.campaign }}
         run: |
           tag="audit-${CAMPAIGN}"
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --target "$(git rev-parse HEAD)" --title "标准清单核验 ${CAMPAIGN}" --notes '按公开查询清单核验状态、发布日期、实施日期、现行替代版本与网页来源。未确认和未覆盖项保留待复核，不把查询失败视为废止。'
-          gh release upload "$tag" reports/标准信息统计表_已核验.xlsx reports/标准信息核验结果.csv reports/核验摘要.json .github_release/核验证据.tar.gz --clobber
-      - name: 自动启动下一片
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --target "$(git rev-parse HEAD)" --title "Standards audit ${CAMPAIGN}" --notes 'Audit of the public query list covering status, publication and implementation dates, current replacements and source URLs. Unconfirmed and unsupported entries remain open for review; failed queries do not imply withdrawal.'
+          gh release upload "$tag" reports/standards-audited.xlsx reports/audit-results.csv reports/audit-summary.json .github_release/audit-evidence.tar.gz --clobber
+      - name: Start the next chunk
         if: steps.audit.outputs.next == 'continue'
         env:
           CAMPAIGN: ${{ steps.audit.outputs.campaign }}

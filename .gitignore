@@ -1,4 +1,4 @@
-# Python 与本地工具环境
+# Python and local tool environments
 __pycache__/
 *.py[oc]
 .venv/
@@ -9,7 +9,7 @@ wheels/
 *.egg-info
 .DS_Store
 
-# 私有输入、凭证与本机配置
+# Private input, credentials and machine configuration
 *.xlsx
 *.xlsm
 *.xls
@@ -24,7 +24,7 @@ wheels/
 .codex/
 .agents/
 
-# 本地运行状态及中间文件
+# Local run state and intermediate files
 /standard_db/
 /.crawl_state/
 /audit_inputs/
@@ -37,5 +37,5 @@ wheels/
 *.db-shm
 *.db-journal
 
-# 公开工作流可提交标准清单对应的核验表。
-!/reports/标准信息统计表_已核验.xlsx
+# Public workflows may commit the workbook derived from the public query list.
+!/reports/standards-audited.xlsx

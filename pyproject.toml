@@ -1,7 +1,7 @@
 [project]
 name = "standard-crawl"
 version = "0.1.0"
-description = "Add your description here"
+description = "Monthly collection and validity auditing of Chinese standards from official sources."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [

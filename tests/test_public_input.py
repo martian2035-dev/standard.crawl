@@ -1,4 +1,4 @@
-"""公开清单不携带私有字段，本地回填保留原表信息。"""
+"""Offline regression tests for public input."""
 import csv
 
 import pytest
@@ -37,10 +37,10 @@ def test_public_input_drops_metadata_private_columns_and_row_order(tmp_path):
 def test_rejects_private_columns_and_formula_input(tmp_path):
     path = tmp_path / "public.csv"
     path.write_text("标准类型,标准号,备注\n国内标准,GB1-2020,隐私\n")
-    with pytest.raises(ValueError, match="只能包含"):
+    with pytest.raises(ValueError, match="must contain only"):
         validate_public(path)
     path.write_text("标准类型,标准号\n国内标准,=1+1\n")
-    with pytest.raises(ValueError, match="非法"):
+    with pytest.raises(ValueError, match="invalid"):
         validate_public(path)
 
 
@@ -49,17 +49,17 @@ def test_local_merge_preserves_private_fields_duplicates_and_missing_results(tmp
     original(source)
     results = tmp_path / "results.csv"
     with results.open("w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["标准类型", "标准号", "原表行号", "核验状态", "核验结论"])
+        writer = csv.DictWriter(f, fieldnames=["标准类型", "标准号", "Input row", "Verified status", "Conclusion"])
         writer.writeheader()
-        writer.writerow({"标准类型": "国内标准", "标准号": "GB2-2020", "原表行号": 2, "核验状态": "现行", "核验结论": "官方来源已核验"})
+        writer.writerow({"标准类型": "国内标准", "标准号": "GB2-2020", "Input row": 2, "Verified status": "现行", "Conclusion": "Verified by official sources"})
     output = merge_local(source, results, tmp_path / "local.xlsx")
     book = load_workbook(output)
     sheet = book["原表"]
     headers = {c.value: c.column for c in sheet[1]}
     assert sheet["C2"].value == "私有甲.pdf" and sheet["C4"].value == "私有丙.pdf"
     assert sheet["D3"].data_type == "f"
-    assert sheet.cell(2, headers["核验状态"]).value == sheet.cell(4, headers["核验状态"]).value == "现行"
-    assert sheet.cell(3, headers["核验结论"]).value == "未采集"
+    assert sheet.cell(2, headers["Verified status"]).value == sheet.cell(4, headers["Verified status"]).value == "现行"
+    assert sheet.cell(3, headers["Conclusion"]).value == "Not collected"
     book.close()
-    with pytest.raises(ValueError, match="不能覆盖"):
+    with pytest.raises(ValueError, match="must not overwrite"):
         merge_local(source, results, source)

@@ -1,4 +1,4 @@
-name: 离线测试
+name: Offline tests
 on:
   push:
     branches: [main]

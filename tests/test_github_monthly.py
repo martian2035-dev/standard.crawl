@@ -1,4 +1,4 @@
-"""月度流程回归：失败页、分片恢复、原表保护与 GitHub 迁移。"""
+"""Offline regression tests for github monthly."""
 import csv
 import json
 from argparse import Namespace
@@ -64,11 +64,11 @@ def test_supplement_preserves_sheets_values_formulas_and_literal_text(tmp_path):
     source = tmp_path / "原表.xlsx"
     make_workbook(source)
     before = source.read_bytes()
-    with (tmp_path / "标准信息核验结果.csv").open("w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=["标准号", "原表行号", "核验状态", "核验发布日期", "核验标准名称"])
+    with (tmp_path / "audit-results.csv").open("w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=["标准号", "Input row", "Verified status", "Verified publication date", "Verified standard name"])
         writer.writeheader()
-        writer.writerow({"标准号": "GB 1-2020", "原表行号": 2, "核验状态": "废止",
-                         "核验发布日期": "2020-01-01", "核验标准名称": "=外部文本"})
+        writer.writerow({"标准号": "GB 1-2020", "Input row": 2, "Verified status": "废止",
+                         "Verified publication date": "2020-01-01", "Verified standard name": "=外部文本"})
     out = supplement_workbook(source, tmp_path, tmp_path / "补充.xlsx")
     book = load_workbook(out)
     sheet = book["标准信息"]
@@ -76,9 +76,9 @@ def test_supplement_preserves_sheets_values_formulas_and_literal_text(tmp_path):
     assert sheet["B2"].value == "原状态" and sheet["C2"].data_type == "f"
     assert sheet["A2"].font.bold
     headers = {cell.value: cell.column for cell in sheet[1]}
-    assert sheet.cell(2, headers["核验状态"]).value == "废止"
-    assert sheet.cell(2, headers["核验标准名称"]).data_type == "s"
-    assert sheet.cell(2, headers["核验发布日期"]).number_format == "yyyy-mm-dd"
+    assert sheet.cell(2, headers["Verified status"]).value == "废止"
+    assert sheet.cell(2, headers["Verified standard name"]).data_type == "s"
+    assert sheet.cell(2, headers["Verified publication date"]).number_format == "yyyy-mm-dd"
     assert source.read_bytes() == before
     book.close()
 
@@ -87,19 +87,19 @@ def test_audit_restore_requires_matching_month_and_input(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     github_monthly.INPUT.write_text("标准类型,标准号\n国内标准,GB1-2020\n", encoding="utf-8-sig")
     args = Namespace(campaign="2026-10", restore=True, budget_seconds=60, delay=0)
-    with pytest.raises(ValueError, match="缺少前片"):
+    with pytest.raises(ValueError, match="Missing previous checkpoint"):
         github_monthly.audit(args)
     github_monthly.AUDIT_STATE.mkdir()
     meta = github_monthly.AUDIT_STATE / "campaign.json"
     meta.write_text(json.dumps({"campaign": "2026-09", "input_sha256": "old", "chunks": 1}))
-    with pytest.raises(ValueError, match="月份或原表"):
+    with pytest.raises(ValueError, match="Campaign or input changed"):
         github_monthly.audit(args)
 
 
 def test_audit_end_to_end_with_fresh_online_result(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     github_monthly.INPUT.write_text("标准类型,标准号\n国内标准,GB1-2020\n", encoding="utf-8-sig")
-    # 同目录有私有原表时，云端流程也只能读取公开清单。
+    # Cloud jobs must use only the public query list, even if a private workbook exists nearby.
     Path("标准信息统计表.xlsx").write_bytes(b"private-original-not-a-workbook")
     with Path("国家公开标准信息.csv").open("w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=crawler.NATIONAL_COLUMNS)
@@ -107,26 +107,26 @@ def test_audit_end_to_end_with_fresh_online_result(tmp_path, monkeypatch):
         writer.writerow({"标准类型": "强制性国家标准", "标准号": "GB 1-2020", "标准名称": "测试标准",
                          "状态": "现行", "发布日期": "2020-01-01", "实施日期": "2020-02-01"})
     def online(code):
-        ev = Evidence("samr", "https://std.samr.gov.cn/test", now(), "网页证据/test.txt", "test")
+        ev = Evidence("samr", "https://std.samr.gov.cn/test", now(), "evidence/test.txt", "test")
         data = merge_observations([Observation(code, {"状态": "废止", "标准名称": "测试标准"}, [], [], ev)], [])
-        data.update({"current_versions": [], "replacement_chain": [], "review_notes": ["未确认替代版本"]})
+        data.update({"current_versions": [], "replacement_chain": [], "review_notes": ["Unconfirmed replacement version"]})
         return data
     lookup = Mock(side_effect=online)
     monkeypatch.setattr(github_monthly.audit_pipeline.Auditor, "audit", lambda self, code: lookup(code))
     args = Namespace(campaign="2026-10", restore=False, budget_seconds=60, delay=0)
     github_monthly.audit(args)
-    assert lookup.call_count == 1  # 历史库命中也必须联网。
-    result = json.loads((github_monthly.AUDIT_STATE / "results/运行摘要.json").read_text())
-    assert result["自动续跑"]  # 未确认项允许第二次尝试。
+    assert lookup.call_count == 1  # Baseline matches still require online verification.
+    result = json.loads((github_monthly.AUDIT_STATE / "results/run-summary.json").read_text())
+    assert result["auto_continue"]  # Allow a second attempt for unconfirmed entries.
     args.restore = True
     github_monthly.audit(args)
     assert lookup.call_count == 2
-    assert Path("reports/标准信息统计表_已核验.xlsx").exists()
-    assert Path(".github_release/核验证据.tar.gz").exists()
-    book = load_workbook("reports/标准信息统计表_已核验.xlsx")
-    sheet = book["标准核验结果"]
+    assert Path("reports/standards-audited.xlsx").exists()
+    assert Path(".github_release/audit-evidence.tar.gz").exists()
+    book = load_workbook("reports/standards-audited.xlsx")
+    sheet = book["Audit results"]
     headers = {c.value: c.column for c in sheet[4]}
-    assert sheet.cell(5, headers["核验状态"]).value == "废止"
+    assert sheet.cell(5, headers["Verified status"]).value == "废止"
     assert "文件名" not in headers and "备注" not in headers
     assert not (github_monthly.AUDIT_STATE / "标准信息统计表.xlsx").exists()
     book.close()
@@ -135,25 +135,25 @@ def test_audit_end_to_end_with_fresh_online_result(tmp_path, monkeypatch):
 def test_export_excludes_history_database_and_local_state(tmp_path, monkeypatch):
     root = tmp_path / "source"
     root.mkdir()
-    names = ["README.md", "公开标准查询清单.csv", "标准信息统计表.xlsx", "audit_inputs/manifest.json", "standard_db/standards.db", ".git/config", "local_audit/private.txt", "debug.py", ".env", "notes.md"]
+    names = ["README.md", "public_standards.csv", "标准信息统计表.xlsx", "audit_inputs/manifest.json", "standard_db/standards.db", ".git/config", "local_audit/private.txt", "debug.py", ".env", "notes.md"]
     for name in names:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("样本")
-    (root / "公开标准查询清单.csv").write_text("标准类型,标准号\n国内标准,GB1-2020\n", encoding="utf-8-sig")
+    (root / "public_standards.csv").write_text("标准类型,标准号\n国内标准,GB1-2020\n", encoding="utf-8-sig")
     monkeypatch.setattr(export_github, "ROOT", root)
     monkeypatch.setattr(export_github.subprocess, "check_output", lambda *a, **k: "\0".join(names).encode())
     destination = tmp_path / "destination"
     export_github.export(destination)
-    assert sorted(p.name for p in destination.iterdir()) == ["README.md", "公开标准查询清单.csv"]
-    with pytest.raises(ValueError, match="已存在"):
+    assert sorted(p.name for p in destination.iterdir()) == ["README.md", "public_standards.csv"]
+    with pytest.raises(ValueError, match="already exists"):
         export_github.export(destination)
 
 
 def test_workflows_have_bounded_jobs_and_no_push_crawl_trigger():
     root = Path(__file__).resolve().parents[1]
     for name in ("monthly-audit", "monthly-crawl"):
-        # BaseLoader 保留 on 的字符串语义，避免 YAML 1.1 把 on 当作布尔值。
+        # BaseLoader preserves on as a string instead of interpreting it as a YAML 1.1 boolean.
         config = yaml.load((root / f".github/workflows/{name}.yml").read_text(), Loader=yaml.BaseLoader)
         assert set(config["on"]) == {"schedule", "workflow_dispatch"}
         assert config["permissions"] == {"contents": "write", "actions": "write"}
@@ -161,3 +161,18 @@ def test_workflows_have_bounded_jobs_and_no_push_crawl_trigger():
         assert int(job["timeout-minutes"]) < 360
         assert job["if"] == "github.ref == 'refs/heads/main'"
         assert "github.token" in job["env"]["GH_TOKEN"]
+
+
+def test_audit_rejects_checkpoint_from_previous_report_format(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    github_monthly.INPUT.write_text("标准类型,标准号\n国内标准,GB1-2020\n", encoding="utf-8-sig")
+    github_monthly.AUDIT_STATE.mkdir()
+    meta = {"campaign": "2026-10", "input_sha256": github_monthly.audit_pipeline.sha256(github_monthly.INPUT), "chunks": 1}
+    (github_monthly.AUDIT_STATE / "campaign.json").write_text(json.dumps(meta))
+    build = Mock()
+    monkeypatch.setattr(github_monthly.build_db, "build", build)
+    args = Namespace(campaign="2026-10", restore=True, budget_seconds=60, delay=0)
+    with pytest.raises(ValueError, match="Incompatible checkpoint format"):
+        github_monthly.audit(args)
+    build.assert_not_called()
+    assert not Path("reports").exists()

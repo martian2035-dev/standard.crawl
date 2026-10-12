@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""先离线匹配历史库，再按优先级分片联网核验；云端输入不包含文件名等信息。"""
+"""Screen a fixed baseline, then run prioritized online audit chunks with minimal input."""
 from __future__ import annotations
 
 import argparse
@@ -13,11 +13,11 @@ from pathlib import Path
 import requests
 
 from standard_audit import (Auditor, CODE_RE, Evidence, Fetcher, LocalStore, Observation,
-                            ROOT, RequestBudgetExceeded, comparable, date_value, export_csv,
+                            ROOT, FIELD_LABELS, RequestBudgetExceeded, comparable, date_value, export_csv,
                             merge_observations, normalize, now, read_input, status_value)
 from audit_excel import export_excel
 
-PROJECTION_HEADERS = ["标准类型", "标准号", "原统计表行号", "检索优先级", "本地筛查原因"]
+PROJECTION_HEADERS = ["标准类型", "标准号", "Original worksheet row", "Search priority", "Screening notes"]
 
 
 def sha256(path):
@@ -48,12 +48,12 @@ class Baseline:
             self.built_at = meta.get("built_at", "")
             self.count = self.conn.execute("SELECT COUNT(*) FROM standards").fetchone()[0]
             if self.conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-                raise ValueError("历史数据库完整性检查失败")
+                raise ValueError("Baseline database integrity check failed")
             manifest_path = self.db.parent / "manifest.json"
             if manifest_path.exists():
                 manifest = json.loads(manifest_path.read_text())
                 if manifest.get("sha256") != self.hash or manifest.get("count_total") != self.count:
-                    raise ValueError("历史数据库与 manifest 的哈希或记录数量不一致")
+                    raise ValueError("Baseline hash or row count differs from the manifest")
         except Exception:
             self.conn.close()
             raise
@@ -67,8 +67,8 @@ class Baseline:
                       "标准类型": row["category"], "行业": row["industry"], "地区": row["region"]}
             if row["is_adopted"]:
                 values["是否采标"] = "采"
-            ev = Evidence("baseline", "", self.built_at, "历史基线/standards.db", self.hash,
-                          {"数据库行ID": row["id"], "来源CSV": row["source_file"], "标准号": row["standard_no"]})
+            ev = Evidence("baseline", "", self.built_at, "baseline/standards.db", self.hash,
+                          {"database_row_id": row["id"], "source_csv": row["source_file"], "标准号": row["standard_no"]})
             observations.append(Observation(normalize(code), {k: v for k, v in values.items() if v}, [], [], ev))
         return merge_observations(observations, []) if observations else None
 
@@ -78,30 +78,30 @@ class Baseline:
 
 def screen(row, baseline_result):
     if not supported(row):
-        return 0, ["国际标准或标准号格式未覆盖"]
+        return 0, ["International standard or unsupported identifier format"]
     if baseline_result is None:
-        return 90, ["本地数据库未精确匹配"]
+        return 90, ["No exact match in the baseline database"]
     values, reasons, score = baseline_result["values"], [], 10
     if "/T" in normalize(row["标准号"]) and "/" not in str(row["标准号"]):
-        reasons.append("已规范推荐标准前缀斜杠；保留原表标准号")
+        reasons.append("Normalized the recommended-standard prefix slash; original identifier retained")
     if values.get("状态") == "废止":
-        reasons.append("本地记录废止，需核实替代链")
+        reasons.append("Baseline record is withdrawn; verify the replacement chain")
         score = max(score, 100)
     if baseline_result["conflicts"]:
-        reasons.append("本地同标准号记录存在冲突")
+        reasons.append("Conflicting baseline records for the same standard number")
         score = max(score, 95)
     for key in ("状态", "发布日期", "实施日期"):
         if not values.get(key):
-            reasons.append("本地记录缺少" + key)
+            reasons.append("Baseline record is missing: " + FIELD_LABELS[key])
             score = max(score, 80)
     for key in ("状态", "发布日期", "实施日期", "标准名称"):
         original = row.get(key, "")
         original = date_value(original) if key.endswith("日期") else (status_value(original) if key == "状态" else original)
         if original and values.get(key) and comparable(original) != comparable(values[key]):
-            reasons.append("原表与本地记录的" + key + "不一致")
+            reasons.append("Input and baseline field " + FIELD_LABELS[key] + " differs")
             score = max(score, 85)
     if not reasons:
-        reasons = ["本地历史匹配，按需联网抽核"]
+        reasons = ["Baseline match; online verification pending"]
     return score, reasons
 
 
@@ -112,7 +112,7 @@ def precheck(input_path, db, output_dir):
     store = LocalStore(output_dir)
     try:
         existing = {n: json.loads(d) for n, d in store.conn.execute("SELECT sheet_row,data FROM results WHERE input_hash=?", (input_hash,))}
-        counts = {"本地匹配行数": 0, "本地废止行数": 0, "本地未匹配行数": 0, "未覆盖行数": 0}
+        counts = {"baseline_matched_rows": 0, "baseline_withdrawn_rows": 0, "baseline_unmatched_rows": 0, "unsupported_rows": 0}
         tasks, memo = [], {}
         for number, row in enumerate(rows, 2):
             code = normalize(row["标准号"])
@@ -121,35 +121,35 @@ def precheck(input_path, db, output_dir):
             result = memo[code]
             priority, reasons = screen(row, result)
             if supported(row):
-                counts["本地匹配行数" if result else "本地未匹配行数"] += 1
-                counts["本地废止行数"] += bool(result and result["values"].get("状态") == "废止")
+                counts["baseline_matched_rows" if result else "baseline_unmatched_rows"] += 1
+                counts["baseline_withdrawn_rows"] += bool(result and result["values"].get("状态") == "废止")
             else:
-                counts["未覆盖行数"] += 1
-            # 原始表在本地筛出的冲突优先级随最小查询清单带入云端。
-            priority = max(priority, int(row.get("检索优先级") or 0)) if supported(row) else 0
-            if row.get("本地筛查原因"):
-                reasons = list(dict.fromkeys(reasons + str(row["本地筛查原因"]).split("；")))
+                counts["unsupported_rows"] += 1
+            # Carry local conflict priorities into the minimal query list.
+            priority = max(priority, int(row.get("Search priority") or 0)) if supported(row) else 0
+            if row.get("Screening notes"):
+                reasons = list(dict.fromkeys(reasons + str(row["Screening notes"]).split("；")))
             tasks.append({"sheet_row": number, "code": code, "priority": priority, "reasons": reasons, "supported": supported(row)})
             if number in existing and not existing[number].get("baseline_only"):
                 continue
             data = dict(result) if result else {"values": {}, "provenance": {}, "observations": [], "conflicts": [], "errors": []}
             data.update({"original": row, "baseline_only": True, "checked_at": baseline.built_at,
-                         "review_notes": ["历史库仅作筛查依据，状态未联网复核；全量采集器按标准号新增，可能保留旧状态。"] + reasons,
+                         "review_notes": ["The baseline is for screening only; status has not been verified online and may be stale."] + reasons,
                          "local_screen": {"priority": priority, "reasons": reasons}})
             if not supported(row):
                 data.update({"skipped": True, "baseline_only": False, "review_notes": reasons})
             store.save_row(input_hash, number, data)
-        evidence_dir = Path(output_dir) / "历史基线"
+        evidence_dir = Path(output_dir) / "baseline"
         evidence_dir.mkdir(parents=True, exist_ok=True)
         destination = evidence_dir / "standards.db"
         if not destination.exists() or sha256(destination) != baseline.hash:
             shutil.copyfile(baseline.db, destination)
         export_csv(store, headers, rows, input_hash)
-        summary = {"输入SHA256": input_hash, "输入行数": len(rows), "历史数据库SHA256": baseline.hash,
-                   "历史数据库构建时间": baseline.built_at, "历史数据库记录数": baseline.count,
-                   **counts, "待联网唯一标准数": len({t["code"] for t in tasks if t["supported"]}), "生成时间": now()}
-        atomic_json(Path(output_dir) / "本地筛查摘要.json", summary)
-        atomic_json(Path(output_dir) / "检索任务.json", tasks)
+        summary = {"input_sha256": input_hash, "input_rows": len(rows), "baseline_sha256": baseline.hash,
+                   "baseline_built_at": baseline.built_at, "baseline_count": baseline.count,
+                   **counts, "online_query_count": len({t["code"] for t in tasks if t["supported"]}), "generated_at": now()}
+        atomic_json(Path(output_dir) / "precheck-summary.json", summary)
+        atomic_json(Path(output_dir) / "search-tasks.json", tasks)
         print(json.dumps(summary, ensure_ascii=False), flush=True)
         return tasks, rows, summary
     finally:
@@ -166,25 +166,25 @@ def prepare(args):
         writer.writeheader()
         for task, row in zip(tasks, rows):
             writer.writerow({"标准类型": row.get("标准类型", ""), "标准号": row["标准号"],
-                             "原统计表行号": task["sheet_row"], "检索优先级": task["priority"],
-                             "本地筛查原因": "；".join(task["reasons"])})
-    atomic_json(args.manifest_dir / "manifest.json", {"原表SHA256": sha256(args.input), "查询清单SHA256": sha256(target),
-                "原表行数": len(rows), "历史数据库SHA256": summary["历史数据库SHA256"],
-                "历史数据库构建时间": summary["历史数据库构建时间"], "生成时间": now()})
+                             "Original worksheet row": task["sheet_row"], "Search priority": task["priority"],
+                             "Screening notes": "；".join(task["reasons"])})
+    atomic_json(args.manifest_dir / "manifest.json", {"original_sha256": sha256(args.input), "query_sha256": sha256(target),
+                "original_rows": len(rows), "baseline_sha256": summary["baseline_sha256"],
+                "baseline_built_at": summary["baseline_built_at"], "generated_at": now()})
     if args.manifest_dir.resolve() == ROOT / "audit_inputs":
-        atomic_json(ROOT / "local_audit" / "本地输入配置.json", {"原表路径": str(args.input.resolve())})
-    print(f"已生成最小查询清单：{target}；不包含文件名、大小、原表备注或原有来源链接。", flush=True)
+        atomic_json(ROOT / "local_audit" / "local-input.json", {"original_path": str(args.input.resolve())})
+    print(f"Prepared minimal query list: {target}; excludes filenames, sizes, private notes and original source URLs.", flush=True)
 
 
 def run(args):
     manifest = json.loads(args.manifest.read_text())
-    if sha256(args.input) != manifest["查询清单SHA256"] or sha256(args.db) != manifest["历史数据库SHA256"]:
-        raise ValueError("查询清单或历史数据库与清单 manifest 不一致，请重新 prepare")
+    if sha256(args.input) != manifest["query_sha256"] or sha256(args.db) != manifest["baseline_sha256"]:
+        raise ValueError("Query list or baseline differs from the manifest; run prepare again")
     tasks, rows, _ = precheck(args.input, args.db, args.output_dir)
     headers, _ = read_input(args.input)
     input_hash, store = sha256(args.input), LocalStore(args.output_dir)
-    previous_summary = args.output_dir / "运行摘要.json"
-    previous_chunks = json.loads(previous_summary.read_text()).get("累计分片数", 0) if previous_summary.exists() else 0
+    previous_summary = args.output_dir / "run-summary.json"
+    previous_chunks = json.loads(previous_summary.read_text()).get("chunks", 0) if previous_summary.exists() else 0
     try:
         records = {n: json.loads(d) for n, d in store.conn.execute("SELECT sheet_row,data FROM results WHERE input_hash=?", (input_hash,))}
         grouped = {}
@@ -203,11 +203,11 @@ def run(args):
         fetcher = Fetcher(store, args.delay, args.timeout, args.retries, args.budget_seconds, args.max_requests)
         auditor = Auditor(store, fetcher, args.sources.split(","), retry_failed=args.retry_failed, source_policy="fallback")
         count = confirmed = 0
-        stop_reason = "批次完成"
+        stop_reason = "Batch complete"
         try:
             for group in queue:
                 code = group[0]["code"]
-                print(f"[{count + 1}/{len(queue)}] 优先核验 {code}", flush=True)
+                print(f"[{count + 1}/{len(queue)}] Auditing by priority: {code}", flush=True)
                 data = auditor.audit(code)
                 for task in group:
                     number = task["sheet_row"]
@@ -221,31 +221,31 @@ def run(args):
                 count += 1
                 confirmed += bool(data["values"].get("状态"))
                 if all(h in fetcher.blocked for h in ["std.samr.gov.cn", "openstd.samr.gov.cn", "hbba.sacinfo.org.cn", "dbba.sacinfo.org.cn"]):
-                    stop_reason = "全部官方站点访问受限，停止并保留进度"
+                    stop_reason = "All official sites are restricted; stopped with progress saved"
                     break
         except (RequestBudgetExceeded, KeyboardInterrupt) as exc:
-            stop_reason = str(exc) or "用户中断"
+            stop_reason = str(exc) or "Interrupted by user"
         export_csv(store, headers, rows, input_hash)
         left = sum(any(records[t["sheet_row"]].get("baseline_only") for t in group) for group in grouped.values())
         pending_count = sum(pending(g) for g in grouped.values())
         chunks = previous_chunks + 1
-        auto_continue = bool(pending_count and count and "全部官方站点" not in stop_reason and chunks < 100)
-        state = "正在自动核验" if auto_continue else ("全表已处理（未确认项需复核）" if not pending_count else "已暂停，请查看停止原因")
+        auto_continue = bool(pending_count and count and "All official sites" not in stop_reason and chunks < 100)
+        state = "Audit in progress" if auto_continue else ("All supported entries processed (unconfirmed results need review)" if not pending_count else "Paused; review stop_reason")
         if pending_count and not count:
-            stop_reason += "；本片无完整标准进展，暂停自动续跑"
+            stop_reason += "; no completed standards this chunk; automatic continuation paused"
         if chunks >= 100 and pending_count:
-            stop_reason += "；已达 100 片上限"
+            stop_reason += "; reached the 100-chunk limit"
         processed = [records[g[0]["sheet_row"]] for g in grouped.values() if not records[g[0]["sheet_row"]].get("baseline_only")]
-        summary = {"本次联网标准数": count, "本次确认状态标准数": confirmed, "本次请求数": fetcher.request_count,
-                   "剩余未联网唯一标准数": left, "停止原因": stop_reason, "生成时间": now(),
-                   "剩余待处理唯一标准数": pending_count,
-                   "原表SHA256": manifest["原表SHA256"], "查询清单SHA256": input_hash,
-                   "历史数据库构建时间": manifest["历史数据库构建时间"], "来源策略": "官方优先按需补缺",
-                   "本次限速秒数": args.delay, "累计分片数": chunks, "自动续跑": auto_continue, "任务状态": state,
-                   "累计已处理唯一标准数": len(processed), "累计确认状态标准数": sum(bool(r.get("values", {}).get("状态")) for r in processed),
-                   "暂停站点": sorted(fetcher.blocked)}
-        atomic_json(args.output_dir / "运行摘要.json", summary)
-        atomic_json(args.output_dir / "输入映射.json", manifest)
+        summary = {"queried_this_run": count, "confirmed_this_run": confirmed, "requests_this_run": fetcher.request_count,
+                   "unqueried_count": left, "stop_reason": stop_reason, "generated_at": now(),
+                   "pending_count": pending_count,
+                   "original_sha256": manifest["original_sha256"], "query_sha256": input_hash,
+                   "baseline_built_at": manifest["baseline_built_at"], "source_policy": "official-first fallback",
+                   "delay_seconds": args.delay, "chunks": chunks, "auto_continue": auto_continue, "task_status": state,
+                   "processed_count": len(processed), "confirmed_count": sum(bool(r.get("values", {}).get("状态")) for r in processed),
+                   "paused_hosts": sorted(fetcher.blocked)}
+        atomic_json(args.output_dir / "run-summary.json", summary)
+        atomic_json(args.output_dir / "input-mapping.json", manifest)
         export_excel(args.output_dir)
         print(json.dumps(summary, ensure_ascii=False), flush=True)
         return 0 if not queue or confirmed else 2
@@ -254,30 +254,30 @@ def run(args):
 
 
 def merge(args):
-    metadata = json.loads((args.result_dir / "输入映射.json").read_text())
-    if sha256(args.input) != metadata["原表SHA256"]:
-        raise ValueError("下载结果对应的原表 SHA256 不一致，拒绝合并")
+    metadata = json.loads((args.result_dir / "input-mapping.json").read_text())
+    if sha256(args.input) != metadata["original_sha256"]:
+        raise ValueError("Downloaded results do not match the original SHA256; refusing to merge")
     headers, rows = read_input(args.input)
     store = LocalStore(args.output_dir)
     try:
-        for line in (args.result_dir / "核验记录.jsonl").read_text().splitlines():
+        for line in (args.result_dir / "audit-records.jsonl").read_text().splitlines():
             data = json.loads(line)
             original = data["original"]
-            number = int(original["原统计表行号"])
+            number = int(original["Original worksheet row"])
             if number < 2 or number > len(rows) + 1 or normalize(original["标准号"]) != normalize(rows[number - 2]["标准号"]):
-                raise ValueError("云端记录与本地原表标准号或行号不一致")
+                raise ValueError("Remote result does not match the original standard number or row")
             data["original"] = rows[number - 2]
-            data.pop("原表行号", None)
-            store.save_row(metadata["原表SHA256"], number, data)
-        # 证据按内容哈希命名；历史基线也随成果包保留，保证字段证据可追溯。
-        for name in ("网页证据", "历史基线"):
+            data.pop("Input row", None)
+            store.save_row(metadata["original_sha256"], number, data)
+        # Keep content-addressed evidence and the fixed baseline with the result package for traceability.
+        for name in ("evidence", "baseline"):
             if (args.result_dir / name).exists():
                 shutil.copytree(args.result_dir / name, args.output_dir / name, dirs_exist_ok=True)
-        target, _ = export_csv(store, headers, rows, metadata["原表SHA256"])
-        if (args.result_dir / "运行摘要.json").exists():
-            shutil.copyfile(args.result_dir / "运行摘要.json", args.output_dir / "运行摘要.json")
+        target, _ = export_csv(store, headers, rows, metadata["original_sha256"])
+        if (args.result_dir / "run-summary.json").exists():
+            shutil.copyfile(args.result_dir / "run-summary.json", args.output_dir / "run-summary.json")
         excel = export_excel(args.output_dir)
-        print(f"已合并到本地原表：{excel}", flush=True)
+        print(f"Merged into a local copy of the original workbook: {excel}", flush=True)
     finally:
         store.conn.close()
 
@@ -285,7 +285,7 @@ def merge(args):
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="统计表离线筛查及分片联网核验")
+    parser = argparse.ArgumentParser(description="Offline screening and resumable online standards audit")
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("prepare", "precheck", "run", "merge"):
         p = sub.add_parser(name)
@@ -310,12 +310,12 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     output = args.output_dir.resolve()
     if output == ROOT or any(output == ROOT / p or ROOT / p in output.parents for p in ("standard_db", ".crawl_state", ".git", "audit_inputs")):
-        parser.error("结果目录不能覆盖仓库、历史数据库、进度或输入清单")
+        parser.error("Output must not overwrite the repository, baseline, state or input manifests")
     if args.command == "run":
         if args.batch_size < 1 or args.budget_seconds <= 0 or args.max_requests < 1 or args.delay < 0 or args.timeout <= 0 or args.retries < 1:
-            parser.error("批次数、请求数和预算必须为正，间隔不能为负")
+            parser.error("Batch size, request count and budgets must be positive; delay cannot be negative")
         if any(s not in ("samr", "national", "industry", "local", "csres") for s in args.sources.split(",")):
-            parser.error("来源参数不合法")
+            parser.error("Invalid source argument")
     return args
 
 
@@ -332,10 +332,10 @@ def main(argv=None):
             merge(args)
         return 0
     except requests.RequestException as exc:
-        print("核验请求失败：" + type(exc).__name__, flush=True)
+        print("Audit request failed: " + type(exc).__name__, flush=True)
         return 1
     except (ValueError, OSError, sqlite3.Error) as exc:
-        print("核验流水线失败：" + str(exc), flush=True)
+        print("Audit pipeline failed: " + str(exc), flush=True)
         return 1
 
 

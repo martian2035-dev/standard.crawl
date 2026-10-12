@@ -1,4 +1,4 @@
-"""采集数据集（去重、更新已有行、兼容旧 CSV）与备案平台列表解析测试"""
+"""Offline regression tests for crawl dataset."""
 
 import pandas as pd
 

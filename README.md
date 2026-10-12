@@ -1,54 +1,56 @@
-# 标准信息采集与核验
+# Standards Collection and Audit
 
-面向公开标准信息的数据采集和有效性核验工具，支持国家标准、行业标准和地方标准。
+Collect public metadata and verify the status of Chinese national, industry and local standards against published source evidence.
 
-## 功能
+## Features
 
-- 按标准号维护标准列表，补充新增记录并更新状态、日期等字段。
-- 支持分页采集、断点续跑和请求限速。
-- 按完整标准号查询官方来源，核实状态及明确记载的替代关系。
-- 保留来源链接和核验时间；查询失败或证据冲突时标记待核查。
-- 支持 GitHub Actions 月度更新。
+- Add new standards and update existing status, date and metadata fields by standard number.
+- Resume paginated collection with persistent checkpoints and request limits.
+- Match complete standard identifiers and follow explicitly documented replacement relationships.
+- Retain source URLs, timestamps and evidence; flag failed queries and conflicting results for review.
+- Run monthly collection and audits through GitHub Actions.
 
-## 数据来源
+## Data sources
 
-| 来源 | 用途 |
+| Source | Purpose |
 | --- | --- |
-| [全国标准信息公共服务平台](https://std.samr.gov.cn/) | 标准检索、详情与替代关系 |
-| [国家标准全文公开系统](https://openstd.samr.gov.cn/bzgk/std/) | 国家标准列表与状态 |
-| [行业标准备案平台](https://hbba.sacinfo.org.cn/) | 行业标准信息 |
-| [地方标准备案平台](https://dbba.sacinfo.org.cn/) | 地方标准信息 |
+| [National Public Service Platform for Standards Information](https://std.samr.gov.cn/) | Search, details and replacement relationships |
+| [National Standards Full-text Disclosure System](https://openstd.samr.gov.cn/bzgk/std/) | National standard listings and status |
+| [Industry Standards Registry](https://hbba.sacinfo.org.cn/) | Industry standard metadata |
+| [Local Standards Registry](https://dbba.sacinfo.org.cn/) | Local standard metadata |
 
-## 使用
+Documentation, command output, workflow labels and release descriptions are in English. Collected data, source field names and standard status values remain in Chinese.
 
-安装依赖：
+## Usage
+
+Install dependencies:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt -r requirements-audit.txt
 ```
 
-查看采集状态：
+Check collection progress:
 
 ```bash
 .venv/bin/python standard_crawl.py --status
 ```
 
-检查公开查询清单：
+Validate the public query list:
 
 ```bash
-.venv/bin/python standard_audit.py 公开标准查询清单.csv --dry-run
+.venv/bin/python standard_audit.py public_standards.csv --dry-run
 ```
 
-详细用法见 [本地核验](docs/统计表本地核验.md) 和 [GitHub 月度任务](docs/GitHub迁移与月度任务.md)。
+See [Local audits](docs/local-audit.md) and [Monthly GitHub Actions](docs/github-actions.md) for details.
 
-## 查询清单与原表
+## Public input and privacy
 
-公开查询清单仅含标准类型和标准号，已去重并排序。原始 Excel、文件名、文件大小、备注及作者元数据保留在本地，不随公开版本分发。
+The public query list contains only standard types and identifiers, deduplicated and sorted. Original Excel workbooks, private filenames, file sizes, notes and author metadata remain local and are excluded from the public export.
 
-核验结果以官方网页证据为依据。“未查到”不等同于“废止”；尚未覆盖的标准或不明确的替代关系需要人工核对。本站不提供标准全文下载。
+Audit conclusions depend on source evidence. A missing search result does **not** imply withdrawal. Unsupported standards and unclear replacement relationships require manual review. This project does not distribute full-text standards.
 
-## 测试
+## Tests
 
 ```bash
 .venv/bin/python -m pip install pytest

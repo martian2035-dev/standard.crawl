@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""本地原表与公开查询清单之间的转换；原文件信息不进入公开清单。"""
+"""Prepare a public query list and merge results locally without publishing private fields."""
 import argparse
 import csv
 import sys
@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 from standard_audit import normalize, read_input
 
-PUBLIC_INPUT = "公开标准查询清单.csv"
+PUBLIC_INPUT = "public_standards.csv"
 PUBLIC_HEADERS = ["标准类型", "标准号"]
 
 
@@ -19,24 +19,24 @@ def validate_public(path):
     with Path(path).open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         if reader.fieldnames != PUBLIC_HEADERS:
-            raise ValueError("公开查询清单只能包含标准类型、标准号两列")
+            raise ValueError("Public query list must contain only 标准类型 and 标准号")
         rows = list(reader)
     if not rows:
-        raise ValueError("公开查询清单不能为空")
+        raise ValueError("Public query list must not be empty")
     for row in rows:
         code = row.get("标准号") or ""
         if (None in row or row.get("标准类型") not in ("国内标准", "国际标准")
                 or not code or code[0] in "=+-@" or any(c in code for c in ("\n", "\r", "\\", ":"))):
-            raise ValueError("公开查询清单存在非法类型或标准号，请在本地检查")
+            raise ValueError("Public query list contains an invalid type or standard number; check it locally")
     return rows
 
 
 def prepare_public(source, target):
     source, target = Path(source), Path(target)
     if source.resolve() == target.resolve():
-        raise ValueError("公开清单不能覆盖原始文件")
+        raise ValueError("Public query list must not overwrite the original file")
     _, rows = read_input(source)
-    # 去重并排序，公开文件不携带原始行号、排列顺序或文件重复数量。
+    # Deduplicate and sort; never expose original row numbers, ordering or duplicate counts.
     records = sorted({("国际标准" if r.get("标准类型") == "国际标准" else "国内标准", normalize(r["标准号"]))
                       for r in rows if str(r.get("标准号") or "").strip()})
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -54,35 +54,35 @@ def prepare_public(source, target):
 
 
 def merge_local(source, results, output):
-    """按标准号把公开核验结果映射回本地原表；不上传原始字段。"""
+    """Map public results to the original local workbook by standard number without uploading private fields."""
     from audit_excel import supplement_workbook
 
     source, output = Path(source), Path(output)
     if source.resolve() == output.resolve():
-        raise ValueError("本地补充表不能覆盖原始文件")
+        raise ValueError("Audited workbook must not overwrite the original file")
     headers, rows = read_input(source)
     with Path(results).open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         extra = [h for h in reader.fieldnames or [] if h not in PUBLIC_HEADERS]
-        if not {"标准号", "核验状态", "核验结论", "原表行号"}.issubset(reader.fieldnames or []):
-            raise ValueError("请使用公开核验结果 CSV")
+        if not {"标准号", "Verified status", "Conclusion", "Input row"}.issubset(reader.fieldnames or []):
+            raise ValueError("Use the public audit results CSV")
         records = {}
         for row in reader:
             code = normalize(row["标准号"])
             if code in records:
-                raise ValueError("核验结果存在重复标准号，拒绝合并")
+                raise ValueError("Audit results contain duplicate standard numbers; refusing to merge")
             records[code] = row
     if set(headers) & set(extra):
-        raise ValueError("请使用尚未追加核验列的本地原始表")
+        raise ValueError("Use the original local workbook without audit columns")
     with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / "标准信息核验结果.csv"
+        path = Path(directory) / "audit-results.csv"
         with path.open("w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=headers + extra, lineterminator="\n")
             writer.writeheader()
             for number, original in enumerate(rows, 2):
                 result = records.get(normalize(original["标准号"]), {})
                 values = {k: result.get(k, "") for k in extra}
-                values.update({"原表行号": number, "核验结论": result.get("核验结论", "未采集")})
+                values.update({"Input row": number, "Conclusion": result.get("Conclusion", "Not collected")})
                 writer.writerow({**original, **values})
         return supplement_workbook(source, Path(directory), output)
 
@@ -96,9 +96,9 @@ if __name__ == "__main__":
     merge = sub.add_parser("merge")
     merge.add_argument("input", type=Path)
     merge.add_argument("results", type=Path)
-    merge.add_argument("--out", type=Path, default=ROOT / "local_audit/标准信息统计表_已核验.xlsx")
+    merge.add_argument("--out", type=Path, default=ROOT / "local_audit/standards-audited.xlsx")
     args = parser.parse_args()
     if args.command == "prepare":
-        print(f"公开查询清单已就绪：{prepare_public(args.input, args.out)} 个去重查询项。原表保持不变。")
+        print(f"Public query list ready: {prepare_public(args.input, args.out)} unique queries. Original workbook unchanged.")
     else:
-        print(f"本地补充表已保存：{merge_local(args.input, args.results, args.out)}")
+        print(f"Audited local workbook saved: {merge_local(args.input, args.results, args.out)}")

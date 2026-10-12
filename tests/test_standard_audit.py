@@ -1,4 +1,4 @@
-"""验证精确匹配、关系方向、来源冲突及本地持久化。运行时不访问外网。"""
+"""Offline regression tests for standard audit."""
 import csv
 import json
 import tempfile
@@ -12,7 +12,7 @@ from standard_audit import (Auditor, Evidence, LocalStore, Observation, SOURCES,
 
 
 def evidence(source="samr"):
-    return Evidence(source, SOURCES[source][1] + "/test", now(), "网页证据/test.txt", "sha")
+    return Evidence(source, SOURCES[source][1] + "/test", now(), "evidence/test.txt", "sha")
 
 
 def observation(code, values, replacements=(), source="samr", relation_text=()):
@@ -130,7 +130,7 @@ class AuditTests(unittest.TestCase):
                 auditor = Auditor(store, Mock(), ["samr"])
                 data = merge_observations([observation("AQ1-2000", {"状态": "废止"}, ["AQ1-2000"])], [])
                 auditor.lookup = lambda code, seed="": data
-                self.assertIn("循环", auditor.audit("AQ1-2000")["review_notes"][0])
+                self.assertIn("cycle", auditor.audit("AQ1-2000")["review_notes"][0])
             finally:
                 store.conn.close()
 
@@ -138,7 +138,7 @@ class AuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = LocalStore(tmp)
             try:
-                data = merge_observations([observation("AQ1-2000", {"状态": "现行"})], [{"source": "csres", "message": "请求失败"}])
+                data = merge_observations([observation("AQ1-2000", {"状态": "现行"})], [{"source": "csres", "message": "Request failed"}])
                 store.save_lookup("k", data)
                 self.assertIsNotNone(store.cached("k", 7))
                 self.assertIsNone(store.cached("k", 7, retry_failed=True))
@@ -151,8 +151,8 @@ class AuditTests(unittest.TestCase):
                 self.assertEqual(len(exported), 3)
                 self.assertEqual(exported[0]["文件名"], "'=危险公式")
                 self.assertEqual(exported[1]["文件名"], "另一个文件")
-                self.assertEqual(exported[2]["核验结论"], "未采集")
-                self.assertEqual(len((Path(tmp) / "核验记录.jsonl").read_text().splitlines()), 2)
+                self.assertEqual(exported[2]["Conclusion"], "Not collected")
+                self.assertEqual(len((Path(tmp) / "audit-records.jsonl").read_text().splitlines()), 2)
             finally:
                 store.conn.close()
 

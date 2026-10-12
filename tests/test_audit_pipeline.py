@@ -1,4 +1,4 @@
-"""独立核验的离线集成测试：历史基线、分片续跑、行号映射与请求预算。"""
+"""Offline regression tests for audit pipeline."""
 import csv
 import json
 import sqlite3
@@ -50,21 +50,21 @@ class PipelineTests(unittest.TestCase):
             db, input_path = make_fixture(root)
             args = parse_args(["prepare", str(input_path), "--db", str(db), "--output-dir", str(root / "out"),
                                "--manifest-dir", str(root / "inputs")])
-            with patch("requests.Session.request", side_effect=AssertionError("离线筛查不能访问网络")):
+            with patch("requests.Session.request", side_effect=AssertionError("Offline screening must not access the network")):
                 prepare(args)
-            summary = json.loads((root / "out/本地筛查摘要.json").read_text())
-            self.assertEqual(summary["本地匹配行数"], 3)
-            self.assertEqual(summary["本地废止行数"], 2)
-            self.assertEqual(summary["本地未匹配行数"], 1)
-            self.assertEqual(summary["未覆盖行数"], 1)
-            self.assertEqual(summary["待联网唯一标准数"], 3)
+            summary = json.loads((root / "out/precheck-summary.json").read_text())
+            self.assertEqual(summary["baseline_matched_rows"], 3)
+            self.assertEqual(summary["baseline_withdrawn_rows"], 2)
+            self.assertEqual(summary["baseline_unmatched_rows"], 1)
+            self.assertEqual(summary["unsupported_rows"], 1)
+            self.assertEqual(summary["online_query_count"], 3)
             projection = (root / "inputs/standards.csv").read_text(encoding="utf-8-sig")
             self.assertNotIn("文件名", projection)
             self.assertNotIn("甲.pdf", projection)
-            with (root / "out/标准信息核验结果.csv").open(encoding="utf-8-sig") as f:
+            with (root / "out/audit-results.csv").open(encoding="utf-8-sig") as f:
                 results = list(csv.DictReader(f))
-            self.assertIn("未匹配", results[3]["核验结论"])
-            self.assertEqual(results[4]["核验结论"], "未覆盖")
+            self.assertIn("No baseline match", results[3]["Conclusion"])
+            self.assertEqual(results[4]["Conclusion"], "Unsupported")
 
     def test_unique_priority_resume_and_merge_preserve_original_rows(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -75,7 +75,7 @@ class PipelineTests(unittest.TestCase):
             args = parse_args(["run", str(root / "inputs/standards.csv"), "--db", str(db),
                                "--manifest", str(root / "inputs/manifest.json"), "--output-dir", str(root / "cloud"), "--batch-size", "1"])
             def result(code):
-                ev = Evidence("samr", "https://std.samr.gov.cn/test", now(), "网页证据/test.txt", "sha")
+                ev = Evidence("samr", "https://std.samr.gov.cn/test", now(), "evidence/test.txt", "sha")
                 data = merge_observations([Observation(code, {"状态": "现行"}, [], [], ev)], [])
                 data.update({"current_versions": [], "replacement_chain": [], "review_notes": []})
                 return data
@@ -89,11 +89,11 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(run(args), 0)
                 self.assertEqual(factory.return_value.audit.call_args.args[0], "GB99-2000")
             merge(parse_args(["merge", str(input_path), "--result-dir", str(root / "cloud"), "--output-dir", str(root / "merged")]))
-            with (root / "merged/标准信息核验结果.csv").open(encoding="utf-8-sig") as f:
+            with (root / "merged/audit-results.csv").open(encoding="utf-8-sig") as f:
                 rows = list(csv.DictReader(f))
             self.assertEqual(len(rows), 5)
             self.assertEqual([rows[1]["文件名"], rows[2]["文件名"]], ["甲.pdf", "乙.pdf"])
-            self.assertEqual([rows[1]["核验状态"], rows[2]["核验状态"]], ["现行", "现行"])
+            self.assertEqual([rows[1]["Verified status"], rows[2]["Verified status"]], ["现行", "现行"])
             input_path.write_text("标准号\nGB 99-2001\n")
             with self.assertRaisesRegex(ValueError, "SHA256"):
                 merge(parse_args(["merge", str(input_path), "--result-dir", str(root / "cloud"), "--output-dir", str(root / "wrong")]))
@@ -110,7 +110,7 @@ class PipelineTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     fetcher.fetch("samr", response.url)
                 self.assertEqual(fetcher.session.request.call_count, 1)
-                self.assertEqual(len(list((Path(directory) / "网页证据").rglob("*.txt"))), 1)
+                self.assertEqual(len(list((Path(directory) / "evidence").rglob("*.txt"))), 1)
                 with self.assertRaises(RequestBudgetExceeded):
                     fetcher.request("GET", "https://hbba.sacinfo.org.cn/test")
             finally:

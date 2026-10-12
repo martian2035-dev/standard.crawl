@@ -1,4 +1,4 @@
-"""构建器 schema v3（主管部门、代替标准、被代替标注）测试"""
+"""Offline regression tests for build relations."""
 
 import sqlite3
 
@@ -50,7 +50,7 @@ def built(tmp_path):
              "JB/T 4711－2003;GB/T 150.1-2011", "国家能源局"],
         ],
     )
-    # 旧格式：没有「代替标准」「主管部门」两列
+    # Older CSVs omit replacement and authority columns.
     write_csv(
         data_dir / "地方公开标准信息.csv",
         ["标准号", "标准名称", "省市区", "状态", "批准日期", "实施日期"],
@@ -66,7 +66,7 @@ def built(tmp_path):
              "2024-05-01", "2024-10-01", "JGJ46-2005", "中华人民共和国住房和城乡建设部"],
             ["GB50016-2014（2018年版）", "建筑设计防火规范", "工程国标", "建筑工程", "现行", "2014-08-27", "2015-05-01",
              "", "中华人民共和国住房和城乡建设部"],
-            # 行业标准备案平台已收录的产品行标：不重复入库
+            # Do not duplicate product standards already in the industry registry.
             ["NB/T47014-2011", "承压设备焊接工艺评定", "产品行标", "", "现行", "2011-07-01", "2011-10-01", "", ""],
             ["JG/T163-2013", "钢筋机械连接用套筒", "产品行标", "建筑工程", "现行", "2013-05-01", "2013-10-01",
              "JG163-2004、JG171-2005", ""],
@@ -137,7 +137,7 @@ def test_verify_passes_on_built_database(built, capsys):
     _, _, out_dir = built
 
     assert build_db.verify(out_dir) == 0
-    assert "申报代替标准 6 条，已被代替 2 条" in capsys.readouterr().out
+    assert "6 declared, 2 replaced" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -173,7 +173,7 @@ def test_engineering_row_already_collected_elsewhere_is_skipped(built):
     rows = connection.execute("SELECT category FROM standards WHERE standard_no_compact = 'NB/T47014-2011'").fetchall()
 
     assert [row["category"] for row in rows] == ["行业标准"]
-    assert manifest["counts"]["工程建设标准"] == 5
+    assert manifest["counts"]["Engineering standards"] == 5
 
 
 def test_replacements_table_covers_old_standards_not_in_database(built):
@@ -203,4 +203,4 @@ def test_build_without_engineering_csv_still_works(tmp_path):
 
     manifest = build_db.build(data_dir, tmp_path / "out", quiet=True)
 
-    assert manifest["count_total"] == 1 and manifest["counts"]["工程建设标准"] == 0
+    assert manifest["count_total"] == 1 and manifest["counts"]["Engineering standards"] == 0
