@@ -1,16 +1,14 @@
 {
   "campaign": "2026-10",
-  "chunk": 3,
+  "chunk": 4,
   "finished": false,
   "reason": "budget",
   "next_action": "crawl",
-  "pages_this_run": 392,
-  "rows_added_this_run": 0,
+  "pages_this_run": 481,
+  "rows_added_this_run": 3,
   "rows_updated_this_run": 0,
-  "elapsed_seconds": 3600.9,
+  "elapsed_seconds": 3603.8,
   "remaining_tasks": [
-    "national:2",
-    "national:3",
     "industry",
     "local"
   ],
@@ -27,37 +25,37 @@
       "updated_at": "2026-10-13 01:57:20+0800"
     },
     "national:2": {
-      "page": 1122,
+      "page": 1230,
       "total_pages": 1230,
-      "finished": false,
-      "pages_fetched": 1122,
+      "finished": true,
+      "pages_fetched": 1230,
       "rows_added": 0,
       "failures": 0,
       "skipped_pages": [],
       "last_error": "",
-      "updated_at": "2026-10-13 04:40:51+0800"
+      "updated_at": "2026-10-13 04:56:25+0800"
     },
     "national:3": {
-      "page": 0,
-      "total_pages": null,
-      "finished": false,
-      "pages_fetched": 0,
+      "page": 19,
+      "total_pages": 19,
+      "finished": true,
+      "pages_fetched": 19,
       "rows_added": 0,
       "failures": 0,
       "skipped_pages": [],
       "last_error": "",
-      "updated_at": ""
+      "updated_at": "2026-10-13 04:58:41+0800"
     },
     "industry": {
-      "page": 0,
-      "total_pages": null,
+      "page": 354,
+      "total_pages": 2383,
       "finished": false,
-      "pages_fetched": 0,
-      "rows_added": 0,
+      "pages_fetched": 354,
+      "rows_added": 3,
       "failures": 0,
       "skipped_pages": [],
       "last_error": "",
-      "updated_at": ""
+      "updated_at": "2026-10-13 05:41:23+0800"
     },
     "local": {
       "page": 0,
@@ -82,5 +80,5 @@
       "updated_at": ""
     }
   },
-  "generated_at": "2026-10-13 04:40:52+0800"
+  "generated_at": "2026-10-13 05:41:24+0800"
 }
