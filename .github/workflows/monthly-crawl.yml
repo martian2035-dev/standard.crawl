@@ -1,0 +1,77 @@
+name: 每月更新标准列表与数据库
+
+on:
+  schedule:
+    # UTC 每月 1 日 19:43，即北京时间每月 2 日 03:43。
+    - cron: '43 19 1 * *'
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: '月份 YYYY-MM；留空为北京时间本月；相同月份从断点继续'
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: monthly-standard-crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUNBUFFERED: '1'
+      GH_TOKEN: ${{ github.token }}
+      CAMPAIGN: ${{ inputs.campaign }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-audit.txt
+      - name: 安装依赖
+        run: python -m pip install -r requirements.txt -r requirements-audit.txt
+      - name: 采集一个分片，遇到失败页保留断点
+        id: crawl
+        run: python scripts/github_monthly.py crawl --budget-seconds 3600 --delay 1
+      - name: 保存本片 CSV 和游标（失败时也保存已完成的部分）
+        if: always() && steps.crawl.outcome != 'skipped'
+        run: bash scripts/github_commit.sh 国家公开标准信息.csv 行业公开标准信息.csv 地方公开标准信息.csv .github_crawl_state
+      - name: 上传进度，便于诊断
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crawl-progress-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .github_crawl_state/
+          include-hidden-files: true
+          retention-days: 7
+      - name: 全部采集完成后构建并校验数据库
+        if: steps.crawl.outputs.next == 'build'
+        env:
+          CAMPAIGN: ${{ steps.crawl.outputs.campaign }}
+        run: python scripts/github_monthly.py database
+      - name: 发布月度数据库和 CSV
+        if: steps.crawl.outputs.next == 'build'
+        env:
+          CAMPAIGN: ${{ steps.crawl.outputs.campaign }}
+        run: |
+          tag="standards-${CAMPAIGN}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --target "$(git rev-parse HEAD)" --title "标准数据库 ${CAMPAIGN}" --notes '包含月度扫描后的标准列表、SQLite 压缩包与校验清单。解压数据库后可用 build_db.py --verify 校验。'
+          gh release upload "$tag" .github_release/standards.db.gz .github_release/manifest.json 国家公开标准信息.csv 行业公开标准信息.csv 地方公开标准信息.csv --clobber
+      - name: 自动启动下一片
+        if: steps.crawl.outputs.next == 'crawl'
+        env:
+          CAMPAIGN: ${{ steps.crawl.outputs.campaign }}
+        run: gh workflow run monthly-crawl.yml --ref main -f "campaign=${CAMPAIGN}"
