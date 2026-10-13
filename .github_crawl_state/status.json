@@ -1,13 +1,13 @@
 {
   "campaign": "2026-10",
-  "chunk": 10,
+  "chunk": 11,
   "finished": false,
   "reason": "budget",
   "next_action": "crawl",
-  "pages_this_run": 433,
+  "pages_this_run": 565,
   "rows_added_this_run": 0,
-  "rows_updated_this_run": 7,
-  "elapsed_seconds": 3601.0,
+  "rows_updated_this_run": 41,
+  "elapsed_seconds": 3614.8,
   "remaining_tasks": [
     "local"
   ],
@@ -57,15 +57,15 @@
       "updated_at": "2026-10-13 09:56:02+0800"
     },
     "local": {
-      "page": 840,
+      "page": 1405,
       "total_pages": 2358,
       "finished": false,
-      "pages_fetched": 840,
+      "pages_fetched": 1405,
       "rows_added": 0,
       "failures": 0,
       "skipped_pages": [],
       "last_error": "",
-      "updated_at": "2026-10-13 11:44:38+0800"
+      "updated_at": "2026-10-13 12:45:17+0800"
     },
     "engineering": {
       "page": 0,
@@ -79,5 +79,5 @@
       "updated_at": ""
     }
   },
-  "generated_at": "2026-10-13 11:44:39+0800"
+  "generated_at": "2026-10-13 12:45:19+0800"
 }
