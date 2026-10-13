@@ -1,0 +1,23 @@
+{
+  "queried_this_run": 46,
+  "confirmed_this_run": 44,
+  "requests_this_run": 92,
+  "unqueried_count": 0,
+  "stop_reason": "Batch complete",
+  "generated_at": "2026-10-14T07:54:36+08:00",
+  "pending_count": 0,
+  "original_sha256": "932e13f75b99b93cb94d20528a06e1c0857749de23b2e170d03170ab7f2b06c7",
+  "query_sha256": "f7b463faba035f50bf7f0d831e50c173acd8d4642b1bffb89d5495b4ad5b2c73",
+  "baseline_built_at": "2026-10-14 00:05:13+0800",
+  "source_policy": "official-first fallback",
+  "delay_seconds": 5.0,
+  "chunks": 28,
+  "auto_continue": false,
+  "task_status": "All supported entries processed (unconfirmed results need review)",
+  "processed_count": 1641,
+  "confirmed_count": 712,
+  "paused_hosts": [
+    "openstd.samr.gov.cn"
+  ],
+  "campaign": "2026-10"
+}
