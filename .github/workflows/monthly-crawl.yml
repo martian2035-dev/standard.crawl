@@ -69,7 +69,13 @@ jobs:
         run: |
           tag="standards-${CAMPAIGN}"
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --target "$(git rev-parse HEAD)" --title "Standards database ${CAMPAIGN}" --notes 'Monthly standards lists, compressed SQLite database and integrity manifest. Extract the database and run build_db.py --verify to check it.'
-          gh release upload "$tag" .github_release/standards.db.gz .github_release/manifest.json 国家公开标准信息.csv 行业公开标准信息.csv 地方公开标准信息.csv --clobber
+          # GitHub keeps only ASCII characters in asset names, so the three Chinese file names would all
+          # collapse to "default.csv" and collide. Upload copies with ASCII names instead.
+          cp 国家公开标准信息.csv .github_release/national-standards.csv
+          cp 行业公开标准信息.csv .github_release/industry-standards.csv
+          cp 地方公开标准信息.csv .github_release/local-standards.csv
+          gh release upload "$tag" .github_release/standards.db.gz .github_release/manifest.json \
+            .github_release/national-standards.csv .github_release/industry-standards.csv .github_release/local-standards.csv --clobber
       - name: Start the next chunk
         if: steps.crawl.outputs.next == 'crawl'
         env:

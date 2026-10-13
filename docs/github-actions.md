@@ -67,6 +67,7 @@ Each audit fixes a baseline database from the available CSV files. Supported sta
 
 - The three collected CSV files are updated in the repository root, retaining their Chinese names and content.
 - `standards-YYYY-MM` releases contain a compressed database and integrity manifest. Large databases are kept out of Git history.
+  Release assets: `standards.db.gz`, `manifest.json` and ASCII-named copies of the collected CSV files (`national-standards.csv`, `industry-standards.csv`, `local-standards.csv`); GitHub strips non-ASCII characters from asset names, so the Chinese file names cannot be used there.
 - `reports/standards-audited.xlsx`, `reports/audit-results.csv` and `reports/audit-summary.json` contain the public audit results.
 - `audit-YYYY-MM` releases archive reports and `audit-evidence.tar.gz` with source response evidence.
 - Release titles, notes and automated commit messages are in English. Tags retain their existing `standards-YYYY-MM` and `audit-YYYY-MM` format.
