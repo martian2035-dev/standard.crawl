@@ -2,8 +2,8 @@
   "version": 1,
   "campaign": "2026-11",
   "created_at": "2026-11-02 07:05:42+0800",
-  "updated_at": "2026-11-10 15:20:03+0800",
-  "chunks": 8,
+  "updated_at": "2026-11-10 16:20:34+0800",
+  "chunks": 9,
   "tasks": {
     "national:1": {
       "page": 124,
@@ -39,15 +39,15 @@
       "updated_at": "2026-11-02 10:30:12+0800"
     },
     "industry": {
-      "page": 1677,
+      "page": 1961,
       "total_pages": 2388,
       "finished": false,
-      "pages_fetched": 1677,
+      "pages_fetched": 1961,
       "rows_added": 95,
       "failures": 3,
       "skipped_pages": [],
       "last_error": "page 1337 unavailable",
-      "updated_at": "2026-11-10 15:19:59+0800"
+      "updated_at": "2026-11-10 16:20:31+0800"
     },
     "local": {
       "page": 0,
