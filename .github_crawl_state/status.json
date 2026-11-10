@@ -1,13 +1,13 @@
 {
   "campaign": "2026-11",
-  "chunk": 9,
+  "chunk": 10,
   "finished": false,
   "reason": "budget",
   "next_action": "crawl",
-  "pages_this_run": 284,
+  "pages_this_run": 296,
   "rows_added_this_run": 0,
-  "rows_updated_this_run": 27,
-  "elapsed_seconds": 3604.2,
+  "rows_updated_this_run": 46,
+  "elapsed_seconds": 3606.0,
   "remaining_tasks": [
     "industry",
     "local"
@@ -47,15 +47,15 @@
       "updated_at": "2026-11-02 10:30:12+0800"
     },
     "industry": {
-      "page": 1961,
+      "page": 2257,
       "total_pages": 2388,
       "finished": false,
-      "pages_fetched": 1961,
+      "pages_fetched": 2257,
       "rows_added": 95,
       "failures": 3,
       "skipped_pages": [],
       "last_error": "page 1337 unavailable",
-      "updated_at": "2026-11-10 16:20:31+0800"
+      "updated_at": "2026-11-10 17:21:05+0800"
     },
     "local": {
       "page": 0,
@@ -80,5 +80,5 @@
       "updated_at": ""
     }
   },
-  "generated_at": "2026-11-10 16:20:34+0800"
+  "generated_at": "2026-11-10 17:21:08+0800"
 }
