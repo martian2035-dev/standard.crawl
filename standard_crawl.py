@@ -128,7 +128,7 @@ def format_date(epoch_millis) -> str:
         return ""
 
 
-def fetch_with_retry(method, url, max_retries=5, **kwargs):
+def fetch_with_retry(method, url, max_retries=6, **kwargs):
     """Retry transient network failures with exponential backoff."""
     timeout = kwargs.pop("timeout", 15)
     for attempt in range(max_retries):
@@ -365,7 +365,7 @@ def get_page_data_sacinfo(task: Task, page: int, page_size: int):
     """Return (rows or None, total pages). None means the page is unavailable."""
     payload = {"current": page, "size": page_size, "key": "", "status": ""}
     try:
-        resp = fetch_with_retry("POST", task.api, headers=HEADERS, data=payload)
+        resp = fetch_with_retry("POST", task.api, headers=HEADERS, data=payload, timeout=30)
         res = resp.json()
     except Exception as exc:
         log("[ERROR] %s page %d failed: %s" % (task.label, page, exc))
@@ -490,7 +490,8 @@ def crawl_task(task: Task, st: dict, ds: Dataset, budget: Budget, args) -> str:
                 fetched += 1
                 page += 1
                 continue
-            time.sleep(1)
+            # Back off between failed-page rounds so a recovering site is not hammered.
+            time.sleep(min(30, 5 * consecutive_failures))
             continue
 
         consecutive_failures = 0

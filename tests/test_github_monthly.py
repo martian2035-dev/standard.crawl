@@ -176,3 +176,61 @@ def test_audit_rejects_checkpoint_from_previous_report_format(tmp_path, monkeypa
         github_monthly.audit(args)
     build.assert_not_called()
     assert not Path("reports").exists()
+
+
+def test_crawl_passes_relaxed_retry_settings_and_reports_reason(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    seen = {}
+
+    def fake_run_chunk(args):
+        seen["page_retries"] = args.page_retries
+        seen["delay"] = args.delay
+        return {"reason": "upstream-error", "next_action": "stop",
+                "tasks": {key: {"skipped_pages": []} for key in github_monthly.CRAWL_TASKS}}
+
+    monkeypatch.setattr(github_monthly.standard_crawl, "run_chunk", fake_run_chunk)
+    output = tmp_path / "step-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    args = Namespace(campaign="2026-11", budget_seconds=3600, delay=3, page_retries=8)
+    with pytest.raises(ValueError, match="Crawl paused"):
+        github_monthly.crawl(args)
+    assert seen == {"page_retries": 8, "delay": 3}
+    assert output.read_text() == "campaign=2026-11\nnext=stop\nreason=upstream-error\n"
+
+
+def test_sacinfo_pages_use_a_longer_request_timeout(monkeypatch):
+    import inspect
+    original_fetch = crawler.fetch_with_retry
+    calls = {}
+
+    class FakeResponse:
+        @staticmethod
+        def json():
+            return {"records": [{"code": "NB/T 1-2020", "chName": "测试标准"}], "pages": 1}
+
+    def fake_fetch(method, url, **kwargs):
+        calls["timeout"] = kwargs.get("timeout")
+        return FakeResponse()
+
+    monkeypatch.setattr(crawler, "fetch_with_retry", fake_fetch)
+    rows, pages = crawler.get_page_data_sacinfo(crawler.TASK_BY_KEY["industry"], 1, 50)
+    assert rows and pages == 1
+    assert calls["timeout"] == 30
+    assert inspect.signature(original_fetch).parameters["max_retries"].default == 6
+
+
+def test_crawl_workflow_retries_upstream_errors_a_bounded_number_of_times():
+    root = Path(__file__).resolve().parents[1]
+    config = yaml.load((root / ".github/workflows/monthly-crawl.yml").read_text(), Loader=yaml.BaseLoader)
+    dispatch = config["on"]["workflow_dispatch"]["inputs"]
+    assert dispatch["retry"]["default"] == "0"
+    steps = next(iter(config["jobs"].values()))["steps"]
+    crawl = next(step for step in steps if step.get("id") == "crawl")
+    assert "--delay 3" in crawl["run"]
+    retry = next(step for step in steps if "upstream cooldown" in step.get("name", ""))
+    assert "failure()" in retry["if"]
+    assert "steps.crawl.outputs.reason == 'upstream-error'" in retry["if"]
+    assert "fromJSON(inputs.retry || '0') < 3" in retry["if"]
+    assert "sleep 300" in retry["run"]
+    assert 'retry=$((RETRIES_USED + 1))' in retry["run"]

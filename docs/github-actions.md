@@ -77,6 +77,8 @@ Each audit fixes a baseline database from the available CSV files. Supported sta
 
 Crawl progress is stored in `.github_crawl_state/`. Dispatch the same `campaign` (`YYYY-MM`) to resume. Failed pages are retried, and the monthly database is published only after collection finishes.
 
+When a chunk stops because an upstream site is unavailable (`upstream-error`), the collection workflow waits five minutes and re-dispatches the same campaign automatically, up to three times. The `retry` dispatch input counts attempts; leave it at `0` for manual and scheduled runs. Progress is committed before each retry, so a resumed run continues from the saved cursor. After the last attempt the run stays failed and needs a manual `gh workflow run monthly-crawl.yml --ref main -f "campaign=YYYY-MM"`. Collection uses a 3-second page delay, a 30-second timeout for registry APIs and eight failed-page rounds before pausing.
+
 Audit checkpoints are uploaded as `audit-checkpoint` artifacts with seven-day retention. To resume, enter the same campaign and the latest run ID containing a complete artifact as `restore_run_id`. Continuations verify input and baseline hashes and stop if the artifact is missing or the query list changed.
 
 If the artifact expires, leave `restore_run_id` empty to start over. New campaigns use fresh caches; chunks in the same campaign share a cache. HTTP 403, 429 and CAPTCHA responses pause a site until cooldown.

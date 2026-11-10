@@ -10,6 +10,10 @@ on:
         description: 'Campaign YYYY-MM; empty uses the current Asia/Shanghai month; same month resumes'
         type: string
         default: ''
+      retry:
+        description: 'Automatic retries already used after an upstream error; keep 0 for manual runs'
+        type: string
+        default: '0'
 
 permissions:
   contents: write
@@ -45,7 +49,7 @@ jobs:
         run: python -m pip install -r requirements.txt -r requirements-audit.txt
       - name: Collect one chunk and preserve the cursor on failure
         id: crawl
-        run: python scripts/github_monthly.py crawl --budget-seconds 3600 --delay 1
+        run: python scripts/github_monthly.py crawl --budget-seconds 3600 --delay 3
       - name: Save CSV files and cursors, including partial progress on failure
         if: always() && steps.crawl.outcome != 'skipped'
         run: bash scripts/github_commit.sh 国家公开标准信息.csv 行业公开标准信息.csv 地方公开标准信息.csv .github_crawl_state
@@ -81,3 +85,16 @@ jobs:
         env:
           CAMPAIGN: ${{ steps.crawl.outputs.campaign }}
         run: gh workflow run monthly-crawl.yml --ref main -f "campaign=${CAMPAIGN}"
+      - name: Retry the same chunk after an upstream cooldown
+        if: >-
+          failure() && steps.crawl.outcome == 'failure' &&
+          steps.crawl.outputs.reason == 'upstream-error' &&
+          fromJSON(inputs.retry || '0') < 3
+        env:
+          CAMPAIGN: ${{ steps.crawl.outputs.campaign }}
+          RETRIES_USED: ${{ inputs.retry || '0' }}
+        run: |
+          # Let the upstream site recover before queuing the next attempt.
+          sleep 300
+          gh workflow run monthly-crawl.yml --ref main \
+            -f "campaign=${CAMPAIGN}" -f "retry=$((RETRIES_USED + 1))"

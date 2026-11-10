@@ -27,10 +27,12 @@ wheels/
 # Local run state and intermediate files
 /standard_db/
 /.crawl_state/
+/.pytest_tmp/
 /audit_inputs/
 /local_audit/
 /.github_audit_work/
 /.github_release/
+/.workbuddy/
 /github-export/
 *.tmp
 *.db-wal

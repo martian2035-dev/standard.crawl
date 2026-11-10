@@ -54,14 +54,15 @@ def summary(data):
 def crawl(args):
     options = ["--campaign", args.campaign, "--state-dir", str(CRAWL_STATE),
                "--strict-pages", "--budget-seconds", str(args.budget_seconds),
-               "--delay", str(args.delay), "--max-chunks", "100"]
+               "--delay", str(args.delay), "--max-chunks", "100",
+               "--page-retries", str(args.page_retries)]
     for task in CRAWL_TASKS:
         options += ["--only", task]
     status = standard_crawl.run_chunk(standard_crawl.parse_args(options))
     summary(status)
     skipped = any(status["tasks"][task]["skipped_pages"] for task in CRAWL_TASKS)
     next_step = "stop" if skipped else status["next_action"]
-    outputs(campaign=args.campaign, next=next_step)
+    outputs(campaign=args.campaign, next=next_step, reason=status["reason"])
     if next_step == "stop":
         raise ValueError("Crawl paused with progress saved; check the sites and resume the same campaign. Skipped pages must be retried.")
 
@@ -150,12 +151,14 @@ def main(argv=None):
     parser.add_argument("--campaign", default=os.environ.get("CAMPAIGN", ""))
     parser.add_argument("--budget-seconds", type=int, default=3600)
     parser.add_argument("--delay", type=float, default=5)
+    parser.add_argument("--page-retries", type=int, default=8,
+                        help="Consecutive failed-page rounds before pausing; default 8")
     parser.add_argument("--restore", action="store_true")
     args = parser.parse_args(argv)
     try:
         args.campaign = campaign(args.campaign)
-        if args.budget_seconds <= 0 or args.delay < 0:
-            raise ValueError("Time budget must be positive; delay cannot be negative")
+        if args.budget_seconds <= 0 or args.delay < 0 or args.page_retries < 1:
+            raise ValueError("Time budget must be positive; delay cannot be negative; page retries must be positive")
         {"crawl": crawl, "database": package_database, "audit": audit}[args.command](args)
         return 0
     except (ValueError, OSError) as exc:
